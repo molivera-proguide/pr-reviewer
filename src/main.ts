@@ -1,6 +1,7 @@
 #!/usr/bin/env -S bun --no-env-file
 import { ReviewerService } from "./application/reviewer-service.ts";
 import { parseArguments } from "./cli/arguments.ts";
+import { installClaudeSkill } from "./cli/claude-skill-installer.ts";
 import { loadConfig } from "./config/config.ts";
 import { toReviewerError } from "./domain/errors.ts";
 import { startMcpServer } from "./mcp/server.ts";
@@ -12,6 +13,11 @@ async function main(): Promise<void> {
   const args = parseArguments(process.argv.slice(2));
   if (args.command === "version") {
     Bun.stdout.write(`${CLI_NAME} ${APP_VERSION}\n`);
+    return;
+  }
+  if (args.command === "install-claude-skill") {
+    const result = await installClaudeSkill({ force: args.force ?? false });
+    Bun.stdout.write(`Claude skill ${result.status}: ${result.path}\n`);
     return;
   }
   const config = loadConfig();

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Reviewer"
+  short_description: "Review PRs and MRs against SDD artifacts"
+  default_prompt: "Use $pr-reviewer to list and review a selected PR against its SDD artifacts."

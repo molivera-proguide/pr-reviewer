@@ -6,7 +6,7 @@ Local, read-only MCP server that reviews one GitHub pull request or GitLab merge
 
 - The compiled binary, or Bun 1.3+ for development.
 - `git` plus the authenticated provider CLI (`gh` or `glab`).
-- A corporate `ANTHROPIC_API_KEY` in the process environment.
+- A corporate `ANTHROPIC_API_KEY` injected into the MCP process environment.
 
 ## Development
 
@@ -25,22 +25,48 @@ The standalone CLI is named `pr-reviewer`:
 
 ```bash
 pr-reviewer --version
+pr-reviewer install-claude-skill
 pr-reviewer doctor --repository-path <path>
 pr-reviewer mcp
 ```
 
-## Claude Code configuration
+## Claude Code setup
+
+Install the bundled personal skill. It is embedded in the binary and is written to
+`~/.claude/skills/pr-reviewer/SKILL.md` (or under `CLAUDE_CONFIG_DIR`):
+
+```bash
+pr-reviewer install-claude-skill
+```
+
+The skill is available across projects as `/pr-reviewer` and teaches Claude to diagnose the
+server, display immutable PR/MR HEAD SHAs, require explicit Tech Lead selection, and interpret
+non-green outcomes safely.
+
+Register the MCP server at user scope:
+
+```powershell
+claude mcp add --scope user pr-reviewer `
+  --env ANTHROPIC_API_KEY=your_api_key `
+  -- pr-reviewer mcp
+```
+
+Equivalent JSON configuration:
 
 ```json
 {
   "mcpServers": {
-    "sdd-pr-reviewer": {
+    "pr-reviewer": {
       "type": "stdio",
-      "command": "C:/tools/pr-reviewer.exe",
+      "command": "pr-reviewer",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-Do not place `ANTHROPIC_API_KEY` in a versioned configuration file. See [distribution](docs/distribution.md) and the [security model](docs/security-model.md).
+Start a review with `/pr-reviewer`, or ask Claude to review a PR/MR against its SDD artifacts.
+
+Do not place `ANTHROPIC_API_KEY` in a versioned configuration file. The bundled skill contains
+static workflow instructions only and never contains credentials. See
+[distribution](docs/distribution.md) and the [security model](docs/security-model.md).

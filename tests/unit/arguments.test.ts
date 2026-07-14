@@ -13,4 +13,15 @@ describe("CLI arguments", () => {
   test("keeps version as a compatible alias", () => {
     expect(parseArguments(["version"])).toEqual({ command: "version" });
   });
+
+  test("supports installing the bundled Claude skill", () => {
+    expect(parseArguments(["install-claude-skill"])).toEqual({
+      command: "install-claude-skill",
+      force: false,
+    });
+    expect(parseArguments(["install-claude-skill", "--force"])).toEqual({
+      command: "install-claude-skill",
+      force: true,
+    });
+  });
 });

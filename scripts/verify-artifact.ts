@@ -32,9 +32,11 @@ if (exitCode !== 0 || stdout.trim() !== expected) {
   process.exitCode = 1;
 } else {
   const temporaryState = await mkdtemp(join(tmpdir(), "sdd-reviewer-artifact-"));
+  const claudeConfigDirectory = join(temporaryState, "claude");
   const environment: Record<string, string> = Object.fromEntries(
     Object.entries({
       ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDirectory,
       LOCALAPPDATA: temporaryState,
       XDG_STATE_HOME: temporaryState,
       HOME: temporaryState,
@@ -62,6 +64,31 @@ if (exitCode !== 0 || stdout.trim() !== expected) {
   const keyCheck = doctorResult.checks?.find((check) => check.name === "anthropic_api_key");
   if (keyCheck?.status !== "error") {
     throw new Error("Compiled artifact loaded ANTHROPIC_API_KEY from a local .env file.");
+  }
+  const skillInstaller = Bun.spawn([artifact, "install-claude-skill"], {
+    cwd: temporaryState,
+    env: environment,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    windowsHide: true,
+  });
+  const [skillOutput, skillError, skillExitCode] = await Promise.all([
+    new Response(skillInstaller.stdout).text(),
+    new Response(skillInstaller.stderr).text(),
+    skillInstaller.exited,
+  ]);
+  const installedSkillPath = join(claudeConfigDirectory, "skills", "pr-reviewer", "SKILL.md");
+  const installedSkill = await Bun.file(installedSkillPath).text();
+  if (
+    skillExitCode !== 0 ||
+    !skillOutput.includes(installedSkillPath) ||
+    !installedSkill.includes("<!-- managed-by: pr-reviewer -->") ||
+    !installedSkill.includes("review_change_requests")
+  ) {
+    throw new Error(
+      `Compiled skill installation failed: exit=${skillExitCode}, stderr=${JSON.stringify(skillError.trim())}`,
+    );
   }
   const transport = new StdioClientTransport({
     command: artifact,

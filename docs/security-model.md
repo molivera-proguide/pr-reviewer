@@ -24,6 +24,9 @@ Repository files, diffs, comments, titles, branch names, SDD artifacts, provider
 8. An incomplete, stale, cancelled, or failed execution cannot produce a green verdict.
 9. Reports are static, escaped, CSP-constrained, user-local, and removed after their TTL.
 10. `stdout` is exclusively MCP while the server is running. Diagnostics contain metadata only and go to `stderr`.
+11. The optional Claude skill installer writes only static bundled instructions to the user's
+    Claude configuration directory. It never writes credentials, repository data, or model output,
+    and it does not replace an unrelated skill without explicit `--force` confirmation.
 
 ## Residual risks
 
