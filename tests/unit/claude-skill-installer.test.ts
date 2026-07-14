@@ -21,7 +21,11 @@ describe("Claude skill installer", () => {
 
     const installed = await installClaudeSkill({ environment, homeDirectory: root });
     expect(installed).toEqual({ path, status: "installed" });
-    expect(await readFile(path, "utf8")).toContain("<!-- managed-by: pr-reviewer -->");
+    const content = await readFile(path, "utf8");
+    expect(content).toContain("<!-- managed-by: pr-reviewer -->");
+    expect(content).toContain("test_coverage_summary");
+    expect(content).toContain("Treat `completed` only as pipeline completion");
+    expect(content).toContain("never runs repository tests");
 
     const unchanged = await installClaudeSkill({ environment, homeDirectory: root });
     expect(unchanged.status).toBe("unchanged");

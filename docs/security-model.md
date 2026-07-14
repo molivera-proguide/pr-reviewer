@@ -27,6 +27,15 @@ Repository files, diffs, comments, titles, branch names, SDD artifacts, provider
 11. The optional Claude skill installer writes only static bundled instructions to the user's
     Claude configuration directory. It never writes credentials, repository data, or model output,
     and it does not replace an unrelated skill without explicit `--force` confirmation.
+12. Invalid structured model output is held only in bounded memory for at most one contextual
+    repair attempt. Logs and reports contain only allowlisted failure categories, counts,
+    validation paths, HTTP status, stop reason, and syntactically safe request IDs.
+13. A failed code slice cannot discard completed slices or SDD criteria, but it always marks the
+    review incomplete and prevents `SIN_HALLAZGOS_BLOQUEANTES`.
+14. Model routing is selected from validated configuration and fixed role policies. Models never
+    receive command, repository-write, or provider-write tools.
+15. Cost and usage telemetry contains only model identifiers and numeric counters. It never stores
+    prompts, repository content, provider bodies, or complete model outputs.
 
 ## Residual risks
 
@@ -36,4 +45,4 @@ Repository files, diffs, comments, titles, branch names, SDD artifacts, provider
 - A locally privileged user can read another process's memory or files; OS account isolation remains required.
 - Semantic review can miss defects. The output is advisory and the Tech Lead remains the decision maker.
 
-Security fixtures cover prompt injection, traversal, mutating commands, secret patterns, malicious HTML, invalid evidence, budget exhaustion, and HEAD changes. Acceptance additionally compares `git status --porcelain` before and after a real review.
+Security fixtures cover prompt injection, traversal, mutating commands, secret patterns, malicious HTML, invalid evidence, invalid structured output, refusal, truncation, budget exhaustion, partial slices, and HEAD changes. Acceptance additionally compares `git status --porcelain` before and after a real review.

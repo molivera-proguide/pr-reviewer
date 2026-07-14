@@ -3,7 +3,8 @@
   Design-source marker for the self-contained report.
   The production document is embedded and rendered by src/report/html-renderer.ts so the
   standalone Bun executable has no runtime template dependency. Keep CSP, no-script,
-  accessibility, responsive, and print invariants synchronized with that renderer.
+  accessibility, responsive, print, incomplete-review warning, and safe slice-diagnostic
+  invariants synchronized with that renderer. Report schema 1.1 remains compatible with 1.0.
 -->
 <html lang="es">
 <head><meta charset="utf-8"><title>SDD PR Reviewer report template</title></head>

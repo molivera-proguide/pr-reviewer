@@ -2,6 +2,21 @@
 
 Local, read-only MCP server that reviews one GitHub pull request or GitLab merge request against its SDD feature artifacts. It retrieves an immutable remote snapshot, delegates bounded analysis to isolated Anthropic sessions, verifies evidence deterministically, and writes a private self-contained HTML report outside the reviewed repository.
 
+Structured agent failures are isolated per code slice. Completed slices and SDD criteria remain in
+the report, while truncation, refusal, schema, API, or budget failures are represented only by safe
+diagnostic metadata and force an incomplete, non-green result.
+
+Implementation coverage and test coverage are computed and reported separately. Verified
+implementation findings deterministically mark their affected SDD criteria as missing, even when
+an exploratory coverage row claimed otherwise. SDD artifacts are analyzed only by the SDD role and
+are excluded from code slices.
+
+Partial implementation coverage requires a matching verified defect or an objectively
+incomplete/conflicting slice; test coverage remains partial unless its complete assertions are
+directly supported. Test visibility cannot downgrade implementation coverage. Expected slice isolation and
+missing optional root artifacts stay out of global limitations, while synthesized Tech Lead
+decisions must reference an extracted SDD conflict.
+
 ## Requirements
 
 - The compiled binary, or Bun 1.3+ for development.
@@ -20,6 +35,12 @@ bun run build
 ```
 
 Run diagnostics with `bun run doctor -- --repository-path <path>`, or start the MCP transport with `bun run mcp`. The MCP process writes protocol frames only to `stdout`; operational diagnostics use `stderr`. Automatic `.env` loading is disabled; inject credentials through the managed process environment.
+
+The default model routing uses `claude-haiku-4-5-20251001` for SDD and code exploration, and
+`claude-sonnet-5` at medium effort for semantic verification and orchestration. Override the roles
+independently with `SDD_REVIEWER_EXPLORER_MODEL`, `SDD_REVIEWER_ORCHESTRATOR_MODEL`, and
+`SDD_REVIEWER_ORCHESTRATOR_EFFORT`. The legacy `SDD_REVIEWER_MODEL` remains a compatibility
+override for every role.
 
 The standalone CLI is named `pr-reviewer`:
 

@@ -39,7 +39,7 @@ export function buildReviewContext(
     };
   });
   for (const artifact of artifacts) {
-    if (artifact.status !== "loaded") {
+    if (artifact.status !== "loaded" && artifact.status !== "missing") {
       limitations.push(`Artifact ${artifact.path}: ${artifact.status}`);
     }
   }

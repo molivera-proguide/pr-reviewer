@@ -1,4 +1,8 @@
 export type ReviewerErrorCode =
+  | "AGENT_API_ERROR"
+  | "AGENT_MAX_TOKENS"
+  | "AGENT_REFUSAL"
+  | "AGENT_SCHEMA_VALIDATION"
   | "AUTH_REQUIRED"
   | "BUDGET_EXCEEDED"
   | "CANCELLED"

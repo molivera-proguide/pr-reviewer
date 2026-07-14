@@ -91,6 +91,12 @@ export const reviewOutputShape = {
     missing: z.number().int().nonnegative(),
     not_verifiable: z.number().int().nonnegative(),
   }),
+  test_coverage_summary: z.object({
+    covered: z.number().int().nonnegative(),
+    partial: z.number().int().nonnegative(),
+    missing: z.number().int().nonnegative(),
+    not_verifiable: z.number().int().nonnegative(),
+  }),
   usage: z.object({
     input_tokens: z.number().int().nonnegative(),
     output_tokens: z.number().int().nonnegative(),

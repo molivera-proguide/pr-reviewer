@@ -29,7 +29,15 @@ describe("budget and verdict invariants", () => {
     const budget = new UsageBudget({ maxCalls: 2, maxOutputTokens: 100, deadlineMs: 10_000 });
     budget.reserveCall(40);
     budget.recordUsage(20, 30);
-    expect(budget.snapshot()).toEqual({ inputTokens: 20, outputTokens: 30, calls: 1 });
+    expect(budget.snapshot()).toEqual({
+      inputTokens: 20,
+      outputTokens: 30,
+      calls: 1,
+      baseInputTokens: 20,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      thinkingTokens: 0,
+    });
   });
 
   test("stops before a call that would exceed limits", () => {

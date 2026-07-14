@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ReviewReport } from "../../src/domain/contracts.ts";
+import { type ReviewReport, reviewReportSchema } from "../../src/domain/contracts.ts";
 import { escapeHtml, renderReportHtml } from "../../src/report/html-renderer.ts";
 
 const report: ReviewReport = {
@@ -19,11 +19,14 @@ const report: ReviewReport = {
   feature: { number: "001", origin: "title", directory: "specs/001-auth" },
   artifacts: [],
   coverage: [],
+  testCoverage: [],
   findings: [],
   risks: [],
   pendingDecisions: [],
   limitations: [],
   stagesIncomplete: [],
+  slices: [],
+  attemptDiagnostics: [],
   status: "completed",
   verdict: "SIN_HALLAZGOS_BLOQUEANTES",
   usage: { inputTokens: 10, outputTokens: 5, calls: 2 },
@@ -44,5 +47,103 @@ describe("HTML report", () => {
     expect(html).toContain("frame-ancestors 'none'");
     expect(html).not.toContain("<script");
     expect(html).not.toMatch(/https?:\/\//);
+  });
+
+  test("keeps legacy 1.0 reports readable with empty diagnostics", () => {
+    const {
+      slices: _slices,
+      attemptDiagnostics: _diagnostics,
+      testCoverage: _testCoverage,
+      ...legacy
+    } = report;
+    const parsed = reviewReportSchema.parse(legacy);
+    expect(parsed.schemaVersion).toBe("1.0");
+    expect(parsed.slices).toEqual([]);
+    expect(parsed.attemptDiagnostics).toEqual([]);
+    expect(parsed.testCoverage).toEqual([]);
+  });
+
+  test("makes incomplete zero-finding reviews visibly distinct", () => {
+    const html = renderReportHtml({
+      ...report,
+      schemaVersion: "1.1",
+      status: "incomplete",
+      verdict: "REQUIERE_DECISION",
+      stagesIncomplete: ["code_exploration:slice-2"],
+      slices: [
+        {
+          id: "slice-2",
+          status: "incomplete",
+          failureKind: "refusal",
+          attempts: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          requestIds: ["req_safe123"],
+        },
+      ],
+      attemptDiagnostics: [
+        {
+          role: "code_explorer",
+          sliceId: "slice-2",
+          attempt: 1,
+          status: "failed",
+          failureKind: "refusal",
+          stopReason: "refusal",
+          requestId: "req_safe123",
+          statusCode: null,
+          inputTokens: 10,
+          outputTokens: 5,
+          payloadBytes: 1_000,
+          validationPaths: [],
+        },
+      ],
+    });
+    expect(html).toContain("0 hallazgos no equivale a 0 defectos");
+    expect(html).toContain("slice-2");
+    expect(html).toContain("refusal");
+    expect(html).toContain("req_safe123");
+  });
+
+  test("shows multi-model usage, thinking, cache, and estimated failed-attempt cost", () => {
+    const html = renderReportHtml({
+      ...report,
+      schemaVersion: "1.2",
+      models: {
+        explorer: "claude-haiku-4-5-20251001",
+        orchestrator: "claude-sonnet-5",
+      },
+      usage: {
+        inputTokens: 20,
+        outputTokens: 10,
+        calls: 2,
+        baseInputTokens: 15,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 5,
+        thinkingTokens: 3,
+      },
+      costEstimate: {
+        currency: "USD",
+        amount: 0.1234,
+        failedAttemptAmount: 0.05,
+        pricingVersion: "test-pricing",
+        complete: true,
+      },
+    });
+    expect(html).toContain("claude-haiku-4-5-20251001 / claude-sonnet-5");
+    expect(html).toContain("USD 0.1234");
+    expect(html).toContain("USD 0.0500 en intentos fallidos");
+    expect(html).toContain("3 thinking");
+    expect(html).toContain("5 tokens");
+  });
+
+  test("separates implementation and test coverage and exposes the reviewer version", () => {
+    const html = renderReportHtml({
+      ...report,
+      schemaVersion: "1.3",
+      reviewerVersion: "0.4.1",
+    });
+    expect(html).toContain("Cobertura de implementación");
+    expect(html).toContain("Cobertura de pruebas");
+    expect(html).toContain("0.4.1 / 1.3");
   });
 });

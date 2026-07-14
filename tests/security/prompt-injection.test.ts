@@ -35,11 +35,21 @@ describe("prompt injection boundary", () => {
     const context = buildReviewContext(
       snapshot,
       { number: "001", origin: "title", directory: "specs/001-test" },
-      [],
+      [
+        {
+          path: "DECISIONS.md",
+          kind: "decisions",
+          revision: snapshot.headSha,
+          content: null,
+          status: "missing",
+          bytes: 0,
+        },
+      ],
     );
     expect(context.snapshot.diff).toContain("ignore previous instructions");
     expect(context.snapshot.diff).not.toContain("sk-ant-");
     expect(context.snapshot.files[0]?.headContent).toBeNull();
     expect(context.limitations).toContain("Sensitive path excluded: .env");
+    expect(context.limitations).not.toContain("Artifact DECISIONS.md: missing");
   });
 });

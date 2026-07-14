@@ -11,6 +11,8 @@
 - [x] Generate escaped, CSP-constrained, private expiring HTML outside the repository.
 - [x] Add unit, contract, integration, security, and E2E pipeline tests.
 - [x] Add compiled build, smoke verification, SHA-256, and cross-platform CI.
+- [x] Add classified structured-output recovery, partial slice aggregation, safe diagnostics, and
+      report schema 1.1 compatibility.
 - [ ] Run opt-in real Anthropic smoke with a corporate key.
 - [ ] Run real GitLab smoke on an authenticated machine with `glab`.
 - [ ] Execute the controlled frozen-PR/MR pilot and calibrate thresholds.

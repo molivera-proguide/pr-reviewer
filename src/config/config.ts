@@ -9,7 +9,10 @@ const booleanString = z
 const environmentSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   CLAUDE_PROJECT_DIR: z.string().min(1).optional(),
-  SDD_REVIEWER_MODEL: z.string().min(1).default("claude-sonnet-5"),
+  SDD_REVIEWER_MODEL: z.string().min(1).optional(),
+  SDD_REVIEWER_EXPLORER_MODEL: z.string().min(1).optional(),
+  SDD_REVIEWER_ORCHESTRATOR_MODEL: z.string().min(1).optional(),
+  SDD_REVIEWER_ORCHESTRATOR_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
   SDD_REVIEWER_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(900_000),
   SDD_REVIEWER_DEBUG: booleanString,
   SDD_REVIEWER_MAX_FILES: z.coerce.number().int().min(1).max(1_000).default(150),
@@ -45,6 +48,9 @@ export interface ReviewerConfig {
   readonly anthropicApiKey?: string;
   readonly claudeProjectDir?: string;
   readonly model: string;
+  readonly explorerModel: string;
+  readonly orchestratorModel: string;
+  readonly orchestratorEffort: "low" | "medium" | "high";
   readonly timeoutMs: number;
   readonly debug: boolean;
   readonly maxFiles: number;
@@ -67,12 +73,20 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Review
     });
   }
   const value = parsed.data;
+  const legacyModel = value.SDD_REVIEWER_MODEL;
+  const orchestratorModel =
+    value.SDD_REVIEWER_ORCHESTRATOR_MODEL ?? legacyModel ?? "claude-sonnet-5";
+  const explorerModel =
+    value.SDD_REVIEWER_EXPLORER_MODEL ?? legacyModel ?? "claude-haiku-4-5-20251001";
   return {
     ...(value.ANTHROPIC_API_KEY === undefined ? {} : { anthropicApiKey: value.ANTHROPIC_API_KEY }),
     ...(value.CLAUDE_PROJECT_DIR === undefined
       ? {}
       : { claudeProjectDir: value.CLAUDE_PROJECT_DIR }),
-    model: value.SDD_REVIEWER_MODEL,
+    model: orchestratorModel,
+    explorerModel,
+    orchestratorModel,
+    orchestratorEffort: value.SDD_REVIEWER_ORCHESTRATOR_EFFORT,
     timeoutMs: value.SDD_REVIEWER_TIMEOUT_MS,
     debug: value.SDD_REVIEWER_DEBUG,
     maxFiles: value.SDD_REVIEWER_MAX_FILES,

@@ -113,10 +113,14 @@ export type Evidence = z.infer<typeof evidenceSchema>;
 export const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 export type Severity = z.infer<typeof severitySchema>;
 
+export const findingImpactSchema = z.enum(["implementation", "test_coverage", "maintainability"]);
+export type FindingImpact = z.infer<typeof findingImpactSchema>;
+
 export const findingSchema = z.object({
   id: z.string().min(1),
   severity: severitySchema,
   category: z.string().min(1),
+  impact: findingImpactSchema.optional(),
   claim: z.string().min(1),
   evidence: z.array(evidenceSchema).min(1),
   confidence: z.number().min(0).max(1),
@@ -127,6 +131,8 @@ export const findingSchema = z.object({
 export type Finding = z.infer<typeof findingSchema>;
 
 export const coverageStatusSchema = z.enum(["covered", "partial", "missing", "not_verifiable"]);
+export const coverageDimensionSchema = z.enum(["implementation", "tests"]);
+export type CoverageDimension = z.infer<typeof coverageDimensionSchema>;
 
 export const reviewCoverageSchema = z.object({
   criterionId: z.string(),
@@ -157,15 +163,89 @@ export const usageSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   calls: z.number().int().nonnegative(),
+  baseInputTokens: z.number().int().nonnegative().optional(),
+  cacheCreationInputTokens: z.number().int().nonnegative().optional(),
+  cacheReadInputTokens: z.number().int().nonnegative().optional(),
+  thinkingTokens: z.number().int().nonnegative().optional(),
 });
 export type Usage = z.infer<typeof usageSchema>;
 
+export const agentRoleSchema = z.enum([
+  "sdd_explorer",
+  "code_explorer",
+  "semantic_verifier",
+  "synthesizer",
+]);
+export type AgentRole = z.infer<typeof agentRoleSchema>;
+
+export const agentFailureKindSchema = z.enum([
+  "max_tokens",
+  "refusal",
+  "schema_validation",
+  "transient_api",
+  "permanent_api",
+  "budget",
+  "cancelled",
+]);
+export type AgentFailureKind = z.infer<typeof agentFailureKindSchema>;
+
+const safeDiagnosticIdentifierSchema = z
+  .string()
+  .max(256)
+  .regex(/^[A-Za-z0-9_.$:\\/-]+$/);
+const safeRequestIdSchema = z
+  .string()
+  .max(256)
+  .regex(/^req[_-][A-Za-z0-9_.:-]+$/);
+
+export const attemptSummarySchema = z.object({
+  role: agentRoleSchema,
+  model: safeDiagnosticIdentifierSchema.optional(),
+  sliceId: safeDiagnosticIdentifierSchema.optional(),
+  attempt: z.number().int().min(1).max(2),
+  status: z.enum(["completed", "failed"]),
+  failureKind: agentFailureKindSchema.optional(),
+  stopReason: z
+    .enum(["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"])
+    .nullable(),
+  requestId: safeRequestIdSchema.nullable(),
+  statusCode: z.number().int().min(100).max(599).nullable(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  baseInputTokens: z.number().int().nonnegative().optional(),
+  cacheCreationInputTokens: z.number().int().nonnegative().optional(),
+  cacheReadInputTokens: z.number().int().nonnegative().optional(),
+  thinkingTokens: z.number().int().nonnegative().optional(),
+  payloadBytes: z.number().int().nonnegative(),
+  validationPaths: z.array(safeDiagnosticIdentifierSchema).max(50),
+});
+export type AttemptSummary = z.infer<typeof attemptSummarySchema>;
+
+export const codeSliceSummarySchema = z.object({
+  id: safeDiagnosticIdentifierSchema,
+  kind: coverageDimensionSchema.optional(),
+  status: z.enum(["completed", "incomplete"]),
+  failureKind: agentFailureKindSchema.optional(),
+  attempts: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  requestIds: z.array(safeRequestIdSchema).max(2),
+});
+export type CodeSliceSummary = z.infer<typeof codeSliceSummarySchema>;
+
 export const reviewReportSchema = z.object({
-  schemaVersion: z.literal("1.0"),
+  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3"]),
+  reviewerVersion: z.string().min(1).optional(),
   reviewId: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),
   expiresAt: z.string().datetime({ offset: true }),
   model: z.string(),
+  models: z
+    .object({
+      explorer: z.string(),
+      orchestrator: z.string(),
+    })
+    .optional(),
   provider: providerKindSchema,
   host: z.string(),
   repository: z.string(),
@@ -177,11 +257,23 @@ export const reviewReportSchema = z.object({
   feature: featureReferenceSchema.nullable(),
   artifacts: z.array(artifactSchema),
   coverage: z.array(reviewCoverageSchema),
+  testCoverage: z.array(reviewCoverageSchema).default([]),
   findings: z.array(findingSchema),
   risks: z.array(z.string()),
   pendingDecisions: z.array(z.string()),
   limitations: z.array(z.string()),
   stagesIncomplete: z.array(z.string()),
+  slices: z.array(codeSliceSummarySchema).default([]),
+  attemptDiagnostics: z.array(attemptSummarySchema).default([]),
+  costEstimate: z
+    .object({
+      currency: z.literal("USD"),
+      amount: z.number().nonnegative(),
+      failedAttemptAmount: z.number().nonnegative(),
+      pricingVersion: z.string().min(1),
+      complete: z.boolean(),
+    })
+    .optional(),
   status: reviewStatusSchema,
   verdict: verdictSchema,
   usage: usageSchema,

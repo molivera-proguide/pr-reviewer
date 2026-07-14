@@ -43,6 +43,12 @@ export function reviewStructuredContent(result: ReviewResult) {
       missing: result.coverageSummary.missing,
       not_verifiable: result.coverageSummary.notVerifiable,
     },
+    test_coverage_summary: {
+      covered: result.testCoverageSummary.covered,
+      partial: result.testCoverageSummary.partial,
+      missing: result.testCoverageSummary.missing,
+      not_verifiable: result.testCoverageSummary.notVerifiable,
+    },
     usage: {
       input_tokens: result.usage.inputTokens,
       output_tokens: result.usage.outputTokens,

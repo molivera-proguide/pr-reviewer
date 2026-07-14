@@ -14,9 +14,12 @@ const headSha = "aaaaaaaaaaaaaaaa";
 const baseSha = "bbbbbbbbbbbbbbbb";
 
 class FakeAgentClient implements StructuredAgentClient {
+  readonly codePayloads: unknown[] = [];
+
   constructor(private readonly budget: UsageBudget) {}
 
   async run<T>(request: AgentRequest<T>): Promise<AgentResponse<T>> {
+    if (request.role === "code_explorer") this.codePayloads.push(request.payload);
     const reservationId = this.budget.reserveCall(request.maxTokens);
     this.budget.recordUsage(100, 50, reservationId);
     const evidence = {
@@ -49,6 +52,7 @@ class FakeAgentClient implements StructuredAgentClient {
             id: "F-001",
             severity: "high",
             category: "authorization",
+            impact: "implementation",
             claim: "The implementation authorizes every caller.",
             evidence: [evidence],
             confidence: 0.99,
@@ -59,8 +63,9 @@ class FakeAgentClient implements StructuredAgentClient {
         coverage: [
           {
             criterionId: "AC-001",
+            dimension: "implementation",
             description: "Deny unauthorized users",
-            status: "missing",
+            status: "covered",
             evidence: [evidence],
             notes: "Always allows.",
           },
@@ -70,10 +75,13 @@ class FakeAgentClient implements StructuredAgentClient {
       semantic_verifier: {
         decisions: [
           {
-            findingId: "F-001",
+            findingId:
+              (request.payload as { findings?: { id: string }[] }).findings?.[0]?.id ?? "F-001",
             confirmed: true,
             rationale: "The cited implementation unconditionally returns true.",
             adjustedSeverity: "high",
+            adjustedImpact: "implementation",
+            confirmedCriterionIds: ["AC-001"],
           },
         ],
       },
@@ -93,8 +101,30 @@ class FakeAgentClient implements StructuredAgentClient {
     } as const;
     return {
       data: request.schema.parse(values[request.role]),
-      usage: { inputTokens: 100, outputTokens: 50 },
+      usage: {
+        inputTokens: 100,
+        outputTokens: 50,
+        baseInputTokens: 100,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        thinkingTokens: 0,
+      },
       requestId: `fake-${request.role}`,
+      diagnostics: [
+        {
+          role: request.role,
+          ...(request.sliceId === undefined ? {} : { sliceId: request.sliceId }),
+          attempt: 1,
+          status: "completed",
+          stopReason: "end_turn",
+          requestId: `fake-${request.role}`,
+          statusCode: null,
+          inputTokens: 100,
+          outputTokens: 50,
+          payloadBytes: 1_000,
+          validationPaths: [],
+        },
+      ],
     };
   }
 }
@@ -126,6 +156,18 @@ describe("complete review pipeline", () => {
           additions: 1,
           deletions: 0,
         },
+        {
+          oldPath: "specs/001-auth/spec.md",
+          path: "specs/001-auth/spec.md",
+          status: "modified",
+          patch: "+approved",
+          headContent: "AC-001: Deny unauthorized users\n/sdd-review APROBADO",
+          baseContent: null,
+          binary: false,
+          truncated: false,
+          additions: 1,
+          deletions: 0,
+        },
       ],
     };
     const context = buildReviewContext(
@@ -147,16 +189,29 @@ describe("complete review pipeline", () => {
       maxOutputTokens: 40_000,
       deadlineMs: 60_000,
     });
+    const client = new FakeAgentClient(budget);
     const result = await runReviewPipeline({
       context,
-      client: new FakeAgentClient(budget),
+      client,
       budget,
       signal: new AbortController().signal,
     });
     expect(result.status).toBe("completed");
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.verified).toBeTrue();
+    expect(result.findings[0]?.id).toMatch(/^finding-[a-f0-9]{16}$/);
+    expect(result.coverage[0]?.status).toBe("missing");
+    expect(result.testCoverage[0]?.status).toBe("not_verifiable");
+    const codePayload = client.codePayloads[0] as {
+      slice: { files: { path: string }[] };
+      changedFileInventory: { path: string }[];
+    };
+    expect(codePayload.slice.files.map((file) => file.path)).toEqual(["src/authorize.ts"]);
+    expect(codePayload.changedFileInventory.map((file) => file.path)).toEqual(["src/authorize.ts"]);
     expect(result.usage.calls).toBe(4);
+    expect(result.slices).toEqual([
+      expect.objectContaining({ id: "slice-1", status: "completed", attempts: 1 }),
+    ]);
     expect(
       calculateVerdict({
         status: result.status,

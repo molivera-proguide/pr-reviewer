@@ -62,6 +62,7 @@ describe("evidence verifier", () => {
           id: "F-1",
           severity: "critical",
           category: "security",
+          impact: "implementation",
           claim: "Invented claim",
           evidence: [
             {

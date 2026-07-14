@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { AnthropicAgentClient } from "../anthropic/agent-client.ts";
+import { AgentExecutionError, AnthropicAgentClient } from "../anthropic/agent-client.ts";
+import { estimateReviewCost } from "../anthropic/pricing.ts";
 import type { ReviewerConfig } from "../config/config.ts";
 import {
   type ChangeRequestSummary,
@@ -75,6 +76,12 @@ export interface ReviewResult {
     confidence: number;
   }[];
   readonly coverageSummary: {
+    covered: number;
+    partial: number;
+    missing: number;
+    notVerifiable: number;
+  };
+  readonly testCoverageSummary: {
     covered: number;
     partial: number;
     missing: number;
@@ -306,7 +313,11 @@ export class ReviewerService {
     });
     const client = new AnthropicAgentClient(
       this.config.anthropicApiKey,
-      this.config.model,
+      {
+        explorerModel: this.config.explorerModel,
+        orchestratorModel: this.config.orchestratorModel,
+        orchestratorEffort: this.config.orchestratorEffort,
+      },
       budget,
       this.logger,
       this.config.timeoutMs,
@@ -322,6 +333,7 @@ export class ReviewerService {
       });
     } catch (error) {
       const reviewerError = toReviewerError(error);
+      const attemptDiagnostics = error instanceof AgentExecutionError ? [...error.diagnostics] : [];
       if (signal.aborted || (reviewerError.code === "CANCELLED" && !timeoutSignal.aborted)) {
         return {
           reviewId,
@@ -339,6 +351,7 @@ export class ReviewerService {
           blockingFindingCount: 0,
           topFindings: [],
           coverageSummary: ZERO_COVERAGE,
+          testCoverageSummary: ZERO_COVERAGE,
           usage: budget.snapshot(),
           message: "Review cancelled before a reliable report could be completed.",
         };
@@ -360,6 +373,7 @@ export class ReviewerService {
           blockingFindingCount: 0,
           topFindings: [],
           coverageSummary: ZERO_COVERAGE,
+          testCoverageSummary: ZERO_COVERAGE,
           usage: budget.snapshot(),
           message: "Review reached its time limit before a reliable report could be completed.",
         };
@@ -375,11 +389,14 @@ export class ReviewerService {
           sddApproved: false,
         },
         coverage: [],
+        testCoverage: [],
         findings: [],
         risks: [],
         pendingDecisions: ["The mandatory agent pipeline did not complete."],
         limitations: [reviewerError.message],
         stagesIncomplete: ["agent_pipeline"],
+        slices: [],
+        attemptDiagnostics,
         status: "incomplete",
         usage: budget.snapshot(),
       };
@@ -395,7 +412,8 @@ export class ReviewerService {
     const coverageDecisions = pipeline.coverage
       .filter(
         (coverage) =>
-          requiredCriterionIds.has(coverage.criterionId) && coverage.status !== "covered",
+          requiredCriterionIds.has(coverage.criterionId) &&
+          (coverage.status === "partial" || coverage.status === "not_verifiable"),
       )
       .map(
         (coverage) =>
@@ -417,11 +435,16 @@ export class ReviewerService {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.config.reportTtlHours * 60 * 60 * 1_000);
     const report: ReviewReport = reviewReportSchema.parse({
-      schemaVersion: "1.0",
+      schemaVersion: "1.3",
+      reviewerVersion: APP_VERSION,
       reviewId,
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
       model: this.config.model,
+      models: {
+        explorer: this.config.explorerModel,
+        orchestrator: this.config.orchestratorModel,
+      },
       provider: provider.kind,
       host: identity.host,
       repository,
@@ -433,11 +456,15 @@ export class ReviewerService {
       feature,
       artifacts: artifacts.map((artifact) => ({ ...artifact, content: null })),
       coverage: pipeline.coverage,
+      testCoverage: pipeline.testCoverage,
       findings: pipeline.findings,
       risks: pipeline.risks,
       pendingDecisions: [...new Set(pendingDecisions)],
       limitations: pipeline.limitations,
       stagesIncomplete: pipeline.stagesIncomplete,
+      slices: pipeline.slices,
+      attemptDiagnostics: pipeline.attemptDiagnostics,
+      costEstimate: estimateReviewCost(pipeline.attemptDiagnostics, now),
       status,
       verdict,
       usage: pipeline.usage,
@@ -472,6 +499,14 @@ export class ReviewerService {
       notVerifiable: pipeline.coverage.filter((coverage) => coverage.status === "not_verifiable")
         .length,
     };
+    const testCoverageSummary = {
+      covered: pipeline.testCoverage.filter((coverage) => coverage.status === "covered").length,
+      partial: pipeline.testCoverage.filter((coverage) => coverage.status === "partial").length,
+      missing: pipeline.testCoverage.filter((coverage) => coverage.status === "missing").length,
+      notVerifiable: pipeline.testCoverage.filter(
+        (coverage) => coverage.status === "not_verifiable",
+      ).length,
+    };
     this.logger.log("info", {
       event: "review_completed",
       reviewId,
@@ -496,11 +531,14 @@ export class ReviewerService {
       blockingFindingCount,
       topFindings,
       coverageSummary,
+      testCoverageSummary,
       usage: pipeline.usage,
       message:
         status === "stale"
           ? "Review completed, but HEAD changed. The report is stale and must not be used for approval."
-          : `Review ${status}; Tech Lead decision required for verdict ${verdict}.`,
+          : status === "incomplete"
+            ? "Review incomplete; zero findings does not mean zero defects because part of the change may not have been reviewed."
+            : `Review ${status}; Tech Lead decision required for verdict ${verdict}.`,
     };
   }
 
@@ -564,6 +602,7 @@ export class ReviewerService {
       blockingFindingCount: 0,
       topFindings: [],
       coverageSummary: ZERO_COVERAGE,
+      testCoverageSummary: ZERO_COVERAGE,
       usage: ZERO_USAGE,
       message: "HEAD no longer matches the SHA selected by the Tech Lead. List changes again.",
     };
