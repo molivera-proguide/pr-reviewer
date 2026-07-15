@@ -81,6 +81,7 @@ class FakeAgentClient implements StructuredAgentClient {
             rationale: "The cited implementation unconditionally returns true.",
             adjustedSeverity: "high",
             adjustedImpact: "implementation",
+            testCoverageStatus: null,
             confirmedCriterionIds: ["AC-001"],
           },
         ],
@@ -208,7 +209,7 @@ describe("complete review pipeline", () => {
     };
     expect(codePayload.slice.files.map((file) => file.path)).toEqual(["src/authorize.ts"]);
     expect(codePayload.changedFileInventory.map((file) => file.path)).toEqual(["src/authorize.ts"]);
-    expect(result.usage.calls).toBe(4);
+    expect(result.usage.calls).toBe(3);
     expect(result.slices).toEqual([
       expect.objectContaining({ id: "slice-1", status: "completed", attempts: 1 }),
     ]);

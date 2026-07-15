@@ -31,10 +31,12 @@ Use only the tools exposed by the `pr-reviewer` MCP server for this workflow. Ke
 - Describe `not_verifiable` as insufficient reliable evidence, not as covered or missing.
 - Do not infer that tests execute or pass. The reviewer reads immutable snapshots and never runs repository tests.
 - Do not describe a test-coverage gap as an implementation defect unless a separate verified implementation finding supports it.
+- Keep test-coverage gaps visible, but never present one as blocking by severity alone; their maximum severity is `medium`.
 
 ## Verdict rules
 
 - Treat `RIESGO_BLOQUEANTE` as blocking.
+- Attribute a blocking finding only to verified `implementation` impact: `critical`, or `high` with one associated SDD criterion.
 - Treat `REQUIERE_DECISION` as requiring explicit human judgment.
 - Describe `SIN_HALLAZGOS_BLOQUEANTES` only as an absence of verified blocking findings, never as automatic approval.
 - Treat `completed` only as pipeline completion. Always use the verdict to describe review risk.

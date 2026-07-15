@@ -5,6 +5,7 @@ import {
   findingImpactSchema,
   reviewCoverageSchema,
   severitySchema,
+  testCoverageStatusSchema,
 } from "../../domain/contracts.ts";
 
 const conciseText = z.string().min(1).max(1_000);
@@ -16,6 +17,10 @@ const agentCoverageSchema = reviewCoverageSchema.extend({
   description: conciseText,
   evidence: z.array(agentEvidenceSchema).max(3),
   notes: z.string().max(1_000),
+});
+const agentLimitationSchema = z.object({
+  scope: z.enum(["global_unavailability", "slice_isolation"]),
+  description: conciseText,
 });
 
 export const sddCriterionSchema = z.object({
@@ -56,13 +61,22 @@ const agentFindingFields = {
 } as const;
 
 const criterionIds = z
-  .array(z.string())
-  .max(10)
-  .describe("Only SDD criterion IDs directly affected by this finding.");
+  .array(z.string().min(1).max(100))
+  .max(1)
+  .describe(
+    "Zero or one existing SDD criterion ID directly affected by this criterion-specific finding. Return separate findings when the same evidence violates different criteria.",
+  );
 
 export const agentFindingSchema = z.discriminatedUnion("impact", [
   z.object({ ...agentFindingFields, impact: z.literal("implementation"), criterionIds }),
-  z.object({ ...agentFindingFields, impact: z.literal("test_coverage"), criterionIds }),
+  z.object({
+    ...agentFindingFields,
+    impact: z.literal("test_coverage"),
+    criterionIds,
+    testCoverageStatus: testCoverageStatusSchema.describe(
+      "Use partial when relevant assertions exist but scenarios or boundaries are incomplete; use missing only when no relevant assertion exists.",
+    ),
+  }),
   z.object({
     ...agentFindingFields,
     impact: z.literal("maintainability"),
@@ -80,16 +94,80 @@ export const codeAnalysisSchema = z.object({
     .array(agentCoverageSchema)
     .max(50)
     .describe("Only coverage directly supported by this slice; omit empty rows."),
-  limitations: z
-    .array(
-      z.object({
-        scope: z.enum(["global_unavailability", "slice_isolation"]),
-        description: conciseText,
-      }),
-    )
-    .max(10),
+  limitations: z.array(agentLimitationSchema).max(10),
 });
 export type CodeAnalysis = z.infer<typeof codeAnalysisSchema>;
+
+const testAssessmentFields = {
+  criterionId: z.string().min(1).max(100),
+  evidence: z.array(agentEvidenceSchema).min(1).max(3),
+  notes: z.string().min(1).max(1_000),
+} as const;
+const testGapFields = {
+  ...testAssessmentFields,
+  claim: z.string().min(1).max(500),
+  confidence: z.number().min(0).max(1),
+  suggestedAction: z.string().min(1).max(600),
+} as const;
+
+export const testAnalysisSchema = z.object({
+  assessments: z
+    .array(
+      z.discriminatedUnion("status", [
+        z.object({ ...testAssessmentFields, status: z.literal("covered") }),
+        z.object({ ...testGapFields, status: z.literal("partial") }),
+        z.object({ ...testGapFields, status: z.literal("missing") }),
+        z.object({
+          criterionId: z.string().min(1).max(100),
+          status: z.literal("not_verifiable"),
+          evidence: z.array(agentEvidenceSchema).max(3),
+          notes: z.string().min(1).max(1_000),
+        }),
+      ]),
+    )
+    .min(1)
+    .max(200)
+    .describe("Exactly one test assessment for every criterion assigned to the slice."),
+  limitations: z.array(agentLimitationSchema).max(10),
+});
+export type TestAnalysis = z.infer<typeof testAnalysisSchema>;
+
+const coverageRepairFields = {
+  criterionId: z.string().min(1).max(100),
+  evidence: z
+    .array(agentEvidenceSchema)
+    .min(1)
+    .max(3)
+    .describe("Exact implementation evidence for this requested criterion."),
+  notes: z.string().min(1).max(1_000),
+} as const;
+
+export const coverageRepairSchema = z.object({
+  assessments: z
+    .array(
+      z.discriminatedUnion("outcome", [
+        z.object({
+          ...coverageRepairFields,
+          outcome: z.literal("covered"),
+        }),
+        z.object({
+          ...coverageRepairFields,
+          outcome: z.literal("defect"),
+          severity: severitySchema,
+          category: z.string().min(1).max(100),
+          claim: z.string().min(1).max(500),
+          confidence: z.number().min(0).max(1),
+          suggestedAction: z.string().min(1).max(600),
+        }),
+      ]),
+    )
+    .min(1)
+    .max(50)
+    .describe(
+      "Exactly one covered or defect assessment for each requested criterion, and no other criteria.",
+    ),
+});
+export type CoverageRepair = z.infer<typeof coverageRepairSchema>;
 
 export const semanticVerificationSchema = z.object({
   decisions: z
@@ -100,7 +178,13 @@ export const semanticVerificationSchema = z.object({
         rationale: z.string().max(600),
         adjustedSeverity: severitySchema,
         adjustedImpact: findingImpactSchema,
-        confirmedCriterionIds: z.array(z.string()).max(10),
+        testCoverageStatus: testCoverageStatusSchema
+          .nullable()
+          .describe("Non-null only for test_coverage impact; classify partial versus missing."),
+        confirmedCriterionIds: z
+          .array(z.string().min(1).max(100))
+          .max(1)
+          .describe("Zero or one existing SDD criterion ID specifically violated by the claim."),
       }),
     )
     .max(50),

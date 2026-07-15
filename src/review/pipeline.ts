@@ -8,6 +8,7 @@ import type {
   Finding,
   ReviewCoverage,
   ReviewStatus,
+  Severity,
   Usage,
 } from "../domain/contracts.ts";
 import { ReviewerError } from "../domain/errors.ts";
@@ -16,15 +17,19 @@ import { PROMPTS } from "./agents/prompts.ts";
 import {
   type AgentFinding,
   type CodeAnalysis,
+  type CoverageRepair,
   codeAnalysisSchema,
+  coverageRepairSchema,
   type SddAnalysis,
+  type SddCriterion,
   sddAnalysisSchema,
   semanticVerificationSchema,
-  synthesisSchema,
+  type TestAnalysis,
+  testAnalysisSchema,
 } from "./agents/schemas.ts";
 import type { ReviewContext } from "./context-builder.ts";
-import { verifyCoverage, verifyFindings } from "./evidence-verifier.ts";
-import { createReviewSlices, type ReviewSlice } from "./slicer.ts";
+import { isEvidenceValid, verifyCoverage, verifyFindings } from "./evidence-verifier.ts";
+import { createReviewSlices, type ReviewSlice, sliceKindOf } from "./slicer.ts";
 
 export type CodeSliceResult =
   | {
@@ -41,6 +46,7 @@ export type CodeSliceResult =
       readonly failureKind: AgentFailureKind;
       readonly limitation: string;
       readonly diagnostics: readonly AttemptSummary[];
+      readonly analysis?: CodeAnalysis;
     };
 
 export interface PipelineResult {
@@ -103,6 +109,177 @@ function stopsNewSlices(kind: AgentFailureKind): boolean {
   return kind === "budget" || kind === "cancelled" || kind === "permanent_api";
 }
 
+const severityRank: Readonly<Record<Severity, number>> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+export function applySeverityCap(finding: Finding): Finding {
+  const maximum: Severity =
+    finding.impact === "test_coverage"
+      ? "medium"
+      : finding.impact === "maintainability"
+        ? "low"
+        : "critical";
+  return severityRank[finding.severity] < severityRank[maximum]
+    ? { ...finding, severity: maximum }
+    : finding;
+}
+
+const testAssertionSignal =
+  /(?:\bexpect\s*\(|\bassert(?:\w*)?\s*\(|\bverify\s*\(|\bshould(?:\.|\s)|\.to(?:Be|Equal|Match|Contain|Throw|Have|StrictEqual)\b)/i;
+
+const genericTestGapWords = new Set([
+  "assertion",
+  "assertions",
+  "coverage",
+  "customer",
+  "customers",
+  "discount",
+  "exercise",
+  "required",
+  "scenario",
+  "scenarios",
+  "suite",
+  "test",
+  "tests",
+  "tier",
+]);
+
+function hasRelevantAssertionEvidence(finding: Finding): boolean {
+  const claimTokens = new Set(
+    (finding.claim.toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter(
+      (token) => token.length >= 4 && !genericTestGapWords.has(token) && !/^ac_?\d+$/.test(token),
+    ),
+  );
+  return finding.evidence.some((item) => {
+    if (!testAssertionSignal.test(item.excerpt)) return false;
+    const excerpt = item.excerpt.toLowerCase();
+    return [...claimTokens].some((token) => excerpt.includes(token));
+  });
+}
+
+export function normalizeTestCoverageFinding(finding: Finding): Finding {
+  if (finding.impact !== "test_coverage") return finding;
+  const testCoverageStatus =
+    finding.testCoverageStatus === "partial" || hasRelevantAssertionEvidence(finding)
+      ? "partial"
+      : "missing";
+  return finding.testCoverageStatus === testCoverageStatus
+    ? finding
+    : { ...finding, testCoverageStatus };
+}
+
+function testAnalysisToCodeAnalysis(options: {
+  analysis: TestAnalysis;
+  slice: ReviewSlice;
+  snapshot: ReviewContext["snapshot"];
+}): { analysis: CodeAnalysis; complete: boolean; limitation: string } {
+  type TestAssessment = TestAnalysis["assessments"][number];
+  const findings: AgentFinding[] = [];
+  const coverage: CodeAnalysis["coverage"] = [];
+  const acceptedIds = new Set<string>();
+  const rejectionReasons: string[] = [];
+  for (const criterion of options.slice.criteria) {
+    const returned = options.analysis.assessments.filter(
+      (assessment) => assessment.criterionId === criterion.id,
+    );
+    if (returned.length === 0) {
+      rejectionReasons.push("missing_assessment");
+      continue;
+    }
+    const validated = returned.flatMap((assessment) => {
+      const evidence = assessment.evidence.filter((item) =>
+        isEvidenceValid(options.snapshot, item),
+      );
+      return assessment.status === "not_verifiable" || evidence.length > 0
+        ? ([{ ...assessment, evidence }] as TestAssessment[])
+        : [];
+    });
+    if (validated.length === 0) {
+      rejectionReasons.push("invalid_evidence");
+      continue;
+    }
+    const statuses = new Set(validated.map((assessment) => assessment.status));
+    if (statuses.size !== 1) {
+      rejectionReasons.push("conflicting_statuses");
+      continue;
+    }
+    const winner = [...validated].sort((left, right) => {
+      const leftConfidence =
+        left.status === "partial" || left.status === "missing" ? left.confidence : 1;
+      const rightConfidence =
+        right.status === "partial" || right.status === "missing" ? right.confidence : 1;
+      const confidenceOrder = rightConfidence - leftConfidence;
+      if (confidenceOrder !== 0) return confidenceOrder;
+      const leftText =
+        left.status === "partial" || left.status === "missing" ? left.claim : left.notes;
+      const rightText =
+        right.status === "partial" || right.status === "missing" ? right.claim : right.notes;
+      return leftText.localeCompare(rightText);
+    })[0];
+    if (winner === undefined) continue;
+    const evidence = validated
+      .flatMap((assessment) => assessment.evidence)
+      .filter(
+        (item, index, all) =>
+          all.findIndex(
+            (candidate) =>
+              candidate.revision === item.revision &&
+              candidate.path === item.path &&
+              candidate.startLine === item.startLine &&
+              candidate.endLine === item.endLine,
+          ) === index,
+      )
+      .sort(
+        (left, right) =>
+          left.path.localeCompare(right.path) ||
+          left.startLine - right.startLine ||
+          left.endLine - right.endLine,
+      )
+      .slice(0, 3);
+    acceptedIds.add(criterion.id);
+    if (winner.status === "partial" || winner.status === "missing") {
+      findings.push({
+        id: `test-${criterion.id}`,
+        severity: "medium",
+        category: "test-coverage",
+        impact: "test_coverage",
+        testCoverageStatus: winner.status,
+        claim: winner.claim,
+        evidence,
+        confidence: winner.confidence,
+        suggestedAction: winner.suggestedAction,
+        criterionIds: [criterion.id],
+      });
+      continue;
+    }
+    coverage.push({
+      criterionId: criterion.id,
+      dimension: "tests",
+      description: criterion.description,
+      status: winner.status,
+      evidence,
+      notes: winner.notes,
+    });
+  }
+  const complete = acceptedIds.size === options.slice.criteria.length;
+  const rejectionSummary = [...new Set(rejectionReasons)]
+    .sort()
+    .map(
+      (reason) =>
+        `${reason}=${rejectionReasons.filter((candidate) => candidate === reason).length}`,
+    )
+    .join(", ");
+  return {
+    analysis: { findings, coverage, limitations: options.analysis.limitations },
+    complete,
+    limitation: `Test exploration rejected ${options.slice.criteria.length - acceptedIds.size} criterion assessment(s): ${rejectionSummary || "unknown=1"}.`,
+  };
+}
+
 async function runCodeSlices(options: {
   slices: readonly ReviewSlice[];
   context: ReviewContext;
@@ -122,19 +299,53 @@ async function runCodeSlices(options: {
 
   async function execute(slice: ReviewSlice): Promise<CodeSliceResult> {
     try {
+      const payload = {
+        repository: options.context.snapshot.baseRepository,
+        headSha: options.context.snapshot.headSha,
+        baseSha: options.context.snapshot.baseSha,
+        slice,
+        changedFileInventory: options.changedFileInventory,
+        constraints: options.sdd.constraints,
+        decisions: options.sdd.decisions,
+      };
+      if (slice.kind === "tests") {
+        const response = await options.client.run({
+          role: "code_explorer",
+          sliceId: slice.id,
+          system: PROMPTS.testExplorer,
+          payload,
+          schema: testAnalysisSchema,
+          maxTokens: 3_200,
+          signal: options.signal,
+        });
+        const converted = testAnalysisToCodeAnalysis({
+          analysis: response.data,
+          slice,
+          snapshot: options.context.snapshot,
+        });
+        return converted.complete
+          ? {
+              status: "completed",
+              sliceId: slice.id,
+              sliceKind: slice.kind,
+              analysis: converted.analysis,
+              diagnostics: response.diagnostics,
+            }
+          : {
+              status: "incomplete",
+              sliceId: slice.id,
+              sliceKind: slice.kind,
+              failureKind: "schema_validation",
+              limitation: converted.limitation,
+              analysis: converted.analysis,
+              diagnostics: response.diagnostics,
+            };
+      }
       const response = await options.client.run({
         role: "code_explorer",
         sliceId: slice.id,
         system: PROMPTS.codeExplorer,
-        payload: {
-          repository: options.context.snapshot.baseRepository,
-          headSha: options.context.snapshot.headSha,
-          baseSha: options.context.snapshot.baseSha,
-          slice,
-          changedFileInventory: options.changedFileInventory,
-          constraints: options.sdd.constraints,
-          decisions: options.sdd.decisions,
-        },
+        payload,
         schema: codeAnalysisSchema,
         maxTokens: 4_000,
         signal: options.signal,
@@ -237,31 +448,63 @@ async function runCodeSlices(options: {
   return output.flatMap((items) => items ?? []);
 }
 
-function stableFindingId(finding: AgentFinding): string {
+type FindingIdentity = Pick<
+  Finding,
+  "impact" | "category" | "claim" | "evidence" | "criterionIds" | "confidence" | "id"
+>;
+
+export function stableFindingId(finding: FindingIdentity): string {
   const first = finding.evidence[0];
-  const identity = [
-    finding.impact,
-    finding.category.toLowerCase(),
-    first?.revision ?? "",
-    first?.path.toLowerCase() ?? "",
-    first?.startLine ?? 0,
-    finding.claim.toLowerCase().replace(/\s+/g, " ").trim(),
-  ].join("|");
+  const criterionId = finding.criterionIds[0];
+  const identity =
+    criterionId === undefined
+      ? [
+          finding.impact ?? "unknown",
+          finding.category.toLowerCase(),
+          first?.revision ?? "",
+          first?.path.toLowerCase() ?? "",
+          first?.startLine ?? 0,
+          finding.claim.toLowerCase().replace(/\s+/g, " ").trim(),
+        ].join("|")
+      : ["criterion", finding.impact ?? "unknown", criterionId, first?.revision ?? ""].join("|");
   return `finding-${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`;
 }
 
-function findingsFromCompletedSlices(results: readonly CodeSliceResult[]): AgentFinding[] {
-  return results.flatMap((result) => {
-    if (result.status !== "completed") return [];
-    return result.analysis.findings
-      .filter(
+function withStableFindingIds<T extends FindingIdentity>(findings: readonly T[]): T[] {
+  const unique = new Map<string, T>();
+  for (const finding of findings) {
+    const id = stableFindingId(finding);
+    const candidate = { ...finding, id };
+    const current = unique.get(id);
+    if (
+      current === undefined ||
+      candidate.confidence > current.confidence ||
+      (candidate.confidence === current.confidence &&
+        candidate.claim.localeCompare(current.claim) < 0)
+    ) {
+      unique.set(id, candidate);
+    }
+  }
+  return [...unique.values()];
+}
+
+function findingsFromCompletedSlices(
+  results: readonly CodeSliceResult[],
+  criteria: readonly SddCriterion[],
+): AgentFinding[] {
+  const validCriterionIds = new Set(criteria.map((criterion) => criterion.id));
+  return withStableFindingIds(
+    results.flatMap((result) => {
+      if (result.analysis === undefined) return [];
+      return result.analysis.findings.filter(
         (finding) =>
-          finding.impact === "maintainability" ||
-          (result.sliceKind === "tests" && finding.impact === "test_coverage") ||
-          (result.sliceKind === "implementation" && finding.impact === "implementation"),
-      )
-      .map((finding) => ({ ...finding, id: stableFindingId(finding) }));
-  });
+          finding.criterionIds.every((criterionId) => validCriterionIds.has(criterionId)) &&
+          (finding.impact === "maintainability" ||
+            (result.sliceKind === "tests" && finding.impact === "test_coverage") ||
+            (result.sliceKind === "implementation" && finding.impact === "implementation")),
+      );
+    }),
+  );
 }
 
 function coverageFromCompletedSlices(
@@ -270,39 +513,76 @@ function coverageFromCompletedSlices(
   findings: readonly Finding[],
 ): ReviewCoverage[] {
   const expectedImpact = dimension === "implementation" ? "implementation" : "test_coverage";
+  const repairedCriterionIds = new Set(
+    dimension === "implementation"
+      ? results.flatMap((result) =>
+          result.sliceId === "coverage-repair-1" && result.analysis !== undefined
+            ? [
+                ...result.analysis.coverage.map((item) => item.criterionId),
+                ...result.analysis.findings.flatMap((finding) => finding.criterionIds),
+              ]
+            : [],
+        )
+      : [],
+  );
   const defectCriterionIds = new Set(
     findings
       .filter((finding) => finding.impact === expectedImpact)
       .flatMap((finding) => finding.criterionIds),
   );
   return results.flatMap((result) => {
-    if (result.status !== "completed" || result.sliceKind !== dimension) return [];
-    return result.analysis.coverage
-      .filter((item) => item.dimension === dimension)
-      .map(({ dimension: _dimension, ...item }) => {
-        if (defectCriterionIds.has(item.criterionId)) return item;
-        if (item.status === "partial" && dimension === "implementation") {
-          return {
-            ...item,
-            status: "covered" as const,
-            notes: `Verified ${dimension} evidence with no matching verified defect.`,
-          };
-        }
-        if (item.status === "missing") {
-          return {
-            ...item,
-            status: "not_verifiable" as const,
-            notes: `The explorer reported missing ${dimension} coverage without a matching verified defect.`,
-          };
-        }
-        return item;
-      });
+    if (result.analysis === undefined || result.sliceKind !== dimension) return [];
+    const grouped = new Map<string, typeof result.analysis.coverage>();
+    for (const item of result.analysis.coverage) {
+      if (item.dimension !== dimension) continue;
+      const group = grouped.get(item.criterionId) ?? [];
+      group.push(item);
+      grouped.set(item.criterionId, group);
+    }
+    return [...grouped.values()].flatMap((items) => {
+      const first = items[0];
+      if (
+        first === undefined ||
+        defectCriterionIds.has(first.criterionId) ||
+        (result.sliceId !== "coverage-repair-1" && repairedCriterionIds.has(first.criterionId))
+      )
+        return [];
+      const evidence = items
+        .flatMap((item) => item.evidence)
+        .filter(
+          (item, index, all) =>
+            all.findIndex(
+              (candidate) =>
+                candidate.revision === item.revision &&
+                candidate.path === item.path &&
+                candidate.startLine === item.startLine &&
+                candidate.endLine === item.endLine,
+            ) === index,
+        )
+        .slice(0, 3);
+      const allCovered = items.every((item) => item.status === "covered");
+      return [
+        {
+          criterionId: first.criterionId,
+          description: first.description,
+          status: allCovered ? ("covered" as const) : ("not_verifiable" as const),
+          evidence,
+          notes: allCovered
+            ? items
+                .map((item) => item.notes)
+                .filter(Boolean)
+                .join(" ")
+                .slice(0, 1_000)
+            : `The explorer did not provide one coherent covered assessment with a matching ${expectedImpact} finding.`,
+        },
+      ];
+    });
   });
 }
 
 function globalAgentLimitations(results: readonly CodeSliceResult[]): string[] {
   return results.flatMap((result) =>
-    result.status === "completed"
+    result.analysis !== undefined
       ? result.analysis.limitations
           .filter((limitation) => limitation.scope === "global_unavailability")
           .map((limitation) => limitation.description)
@@ -326,7 +606,7 @@ function coverageFromFindings(
         {
           criterionId,
           description,
-          status: "missing" as const,
+          status: dimension === "tests" ? (finding.testCoverageStatus ?? "missing") : "missing",
           evidence: finding.evidence,
           notes: finding.claim.slice(0, 1_000),
         },
@@ -351,10 +631,46 @@ function deterministicCoverage(options: {
   context: ReviewContext;
   sdd: SddAnalysis;
   candidates: readonly ReviewCoverage[];
+  findings: readonly Finding[];
+  dimension: CoverageDimension;
   hasIncompleteSlices: boolean;
 }): ReviewCoverage[] {
   const verified = verifyCoverage(options.context.snapshot, options.candidates);
+  const expectedImpact =
+    options.dimension === "implementation" ? "implementation" : "test_coverage";
   return options.sdd.criteria.map((criterion) => {
+    const criterionFindings = options.findings.filter(
+      (finding) =>
+        finding.verified &&
+        finding.impact === expectedImpact &&
+        finding.criterionIds[0] === criterion.id,
+    );
+    if (criterionFindings.length > 0) {
+      const findingStatus =
+        options.dimension === "tests" &&
+        criterionFindings.every((finding) => finding.testCoverageStatus === "partial")
+          ? "partial"
+          : "missing";
+      return {
+        criterionId: criterion.id,
+        description: criterion.description,
+        status: findingStatus,
+        evidence: uniqueEvidence(
+          criterionFindings.map((finding) => ({
+            criterionId: criterion.id,
+            description: criterion.description,
+            status: findingStatus,
+            evidence: finding.evidence,
+            notes: finding.claim,
+          })),
+        ),
+        notes: criterionFindings
+          .map((finding) => finding.claim)
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 1_000),
+      };
+    }
     const matching = verified.filter((item) => item.criterionId === criterion.id);
     const evidence = uniqueEvidence(matching);
     if (matching.length === 0 || evidence.length === 0) {
@@ -367,11 +683,12 @@ function deterministicCoverage(options: {
       };
     }
     const statuses = new Set(matching.map((item) => item.status));
+    const onlyCovered = statuses.size === 1 && statuses.has("covered");
     const status = statuses.has("missing")
       ? "missing"
-      : options.hasIncompleteSlices || statuses.size > 1 || statuses.has("partial")
+      : options.hasIncompleteSlices && statuses.has("covered")
         ? "partial"
-        : statuses.has("covered")
+        : onlyCovered
           ? "covered"
           : "not_verifiable";
     return {
@@ -380,15 +697,228 @@ function deterministicCoverage(options: {
       status,
       evidence,
       notes:
-        options.hasIncompleteSlices && status !== "missing"
+        options.hasIncompleteSlices && status === "partial"
           ? "Coverage is partial because at least one code slice was not reviewed."
-          : matching
-              .map((item) => item.notes)
-              .filter(Boolean)
-              .join(" ")
-              .slice(0, 1_000),
+          : status === "not_verifiable"
+            ? "Completed slices did not return one coherent, deterministically verifiable assessment."
+            : matching
+                .map((item) => item.notes)
+                .filter(Boolean)
+                .join(" ")
+                .slice(0, 1_000),
     };
   });
+}
+
+export function omittedImplementationCriteria(options: {
+  snapshot: ReviewContext["snapshot"];
+  criteria: readonly SddCriterion[];
+  candidates: readonly ReviewCoverage[];
+  findings: readonly Finding[];
+}): SddCriterion[] {
+  const assessedCriterionIds = new Set(
+    verifyCoverage(options.snapshot, options.candidates).flatMap((item) =>
+      item.status === "covered" && item.evidence.length > 0 ? [item.criterionId] : [],
+    ),
+  );
+  const findingCriterionIds = new Set(
+    options.findings.flatMap((finding) =>
+      finding.verified && finding.impact === "implementation" ? finding.criterionIds : [],
+    ),
+  );
+  return options.criteria.filter(
+    (criterion) =>
+      criterion.required &&
+      !assessedCriterionIds.has(criterion.id) &&
+      !findingCriterionIds.has(criterion.id),
+  );
+}
+
+async function runCoverageRepair(options: {
+  criteria: readonly SddCriterion[];
+  implementationFiles: ReviewContext["snapshot"]["files"];
+  evidenceHints: readonly ReviewCoverage[];
+  context: ReviewContext;
+  sdd: SddAnalysis;
+  client: StructuredAgentClient;
+  signal: AbortSignal;
+}): Promise<CodeSliceResult> {
+  const sliceId = "coverage-repair-1";
+  const repairSlice = createReviewSlices(options.implementationFiles, options.criteria, 1)[0];
+  if (repairSlice === undefined) {
+    return {
+      status: "incomplete",
+      sliceId,
+      sliceKind: "implementation",
+      failureKind: "schema_validation",
+      limitation: "Coverage repair had no implementation files available.",
+      diagnostics: [],
+    };
+  }
+  try {
+    const response = await options.client.run({
+      role: "code_explorer",
+      sliceId,
+      system: PROMPTS.coverageRepair,
+      payload: {
+        repository: options.context.snapshot.baseRepository,
+        headSha: options.context.snapshot.headSha,
+        baseSha: options.context.snapshot.baseSha,
+        slice: { ...repairSlice, id: sliceId },
+        constraints: options.sdd.constraints,
+        decisions: options.sdd.decisions,
+        evidenceHints: options.evidenceHints
+          .filter((item) => options.criteria.some((criterion) => criterion.id === item.criterionId))
+          .map((item) => ({
+            criterionId: item.criterionId,
+            evidence: item.evidence.map(({ revision, path, startLine, endLine, excerpt }) => ({
+              revision,
+              path,
+              startLine,
+              endLine,
+              excerpt,
+            })),
+          })),
+      },
+      schema: coverageRepairSchema,
+      maxTokens: 1_600,
+      signal: options.signal,
+    });
+    const criterionDescriptions = new Map(
+      options.criteria.map((criterion) => [criterion.id, criterion.description]),
+    );
+    type RepairAssessment = CoverageRepair["assessments"][number];
+    const accepted: RepairAssessment[] = [];
+    const rejectionReasons: string[] = [];
+    for (const criterion of options.criteria) {
+      const returned = response.data.assessments.filter(
+        (assessment) => assessment.criterionId === criterion.id,
+      );
+      if (returned.length === 0) {
+        rejectionReasons.push("missing_assessment");
+        continue;
+      }
+      const withValidEvidence = returned.flatMap((assessment) => {
+        const evidence = assessment.evidence.filter((item) =>
+          isEvidenceValid(options.context.snapshot, item),
+        );
+        return evidence.length > 0 ? [{ ...assessment, evidence }] : [];
+      });
+      if (withValidEvidence.length === 0) {
+        rejectionReasons.push("invalid_evidence");
+        continue;
+      }
+      const outcomes = new Set(withValidEvidence.map((assessment) => assessment.outcome));
+      if (outcomes.size !== 1) {
+        rejectionReasons.push("conflicting_outcomes");
+        continue;
+      }
+      const evidence = withValidEvidence
+        .flatMap((assessment) => assessment.evidence)
+        .filter(
+          (item, index, all) =>
+            all.findIndex(
+              (candidate) =>
+                candidate.revision === item.revision &&
+                candidate.path === item.path &&
+                candidate.startLine === item.startLine &&
+                candidate.endLine === item.endLine,
+            ) === index,
+        )
+        .sort(
+          (left, right) =>
+            left.path.localeCompare(right.path) ||
+            left.startLine - right.startLine ||
+            left.endLine - right.endLine,
+        )
+        .slice(0, 3);
+      const winner = [...withValidEvidence].sort((left, right) => {
+        const leftConfidence = left.outcome === "defect" ? left.confidence : 1;
+        const rightConfidence = right.outcome === "defect" ? right.confidence : 1;
+        const confidenceOrder = rightConfidence - leftConfidence;
+        if (confidenceOrder !== 0) return confidenceOrder;
+        const leftText = left.outcome === "defect" ? left.claim : left.notes;
+        const rightText = right.outcome === "defect" ? right.claim : right.notes;
+        return leftText.localeCompare(rightText);
+      })[0];
+      if (winner !== undefined) accepted.push({ ...winner, evidence });
+    }
+    const fullyAcceptedIds = new Set(accepted.map((assessment) => assessment.criterionId));
+    const candidateFindings: AgentFinding[] = accepted.flatMap((assessment) =>
+      assessment.outcome === "defect" && fullyAcceptedIds.has(assessment.criterionId)
+        ? [
+            {
+              id: `repair-${assessment.criterionId}`,
+              severity: assessment.severity,
+              category: assessment.category,
+              impact: "implementation",
+              claim: assessment.claim,
+              evidence: assessment.evidence,
+              confidence: assessment.confidence,
+              suggestedAction: assessment.suggestedAction,
+              criterionIds: [assessment.criterionId],
+            },
+          ]
+        : [],
+    );
+    const candidateCoverage: CodeAnalysis["coverage"] = accepted.flatMap((assessment) => {
+      const description = criterionDescriptions.get(assessment.criterionId);
+      return assessment.outcome === "covered" &&
+        fullyAcceptedIds.has(assessment.criterionId) &&
+        description !== undefined
+        ? [
+            {
+              criterionId: assessment.criterionId,
+              dimension: "implementation",
+              description,
+              status: "covered",
+              evidence: assessment.evidence,
+              notes: assessment.notes,
+            },
+          ]
+        : [];
+    });
+    const analysis: CodeAnalysis = {
+      findings: candidateFindings,
+      coverage: candidateCoverage,
+      limitations: [],
+    };
+    const complete = fullyAcceptedIds.size === options.criteria.length;
+    const rejectionSummary = [...new Set(rejectionReasons)]
+      .sort()
+      .map(
+        (reason) =>
+          `${reason}=${rejectionReasons.filter((candidate) => candidate === reason).length}`,
+      )
+      .join(", ");
+    return complete
+      ? {
+          status: "completed",
+          sliceId,
+          sliceKind: "implementation",
+          analysis,
+          diagnostics: response.diagnostics,
+        }
+      : {
+          status: "incomplete",
+          sliceId,
+          sliceKind: "implementation",
+          failureKind: "schema_validation",
+          limitation: `Coverage repair rejected ${options.criteria.length - fullyAcceptedIds.size} requested criterion assessment(s): ${rejectionSummary || "unknown=1"}.`,
+          diagnostics: response.diagnostics,
+          analysis,
+        };
+  } catch (error) {
+    const failure = classifiedFailure(error);
+    return {
+      status: "incomplete",
+      sliceId,
+      sliceKind: "implementation",
+      failureKind: failure.kind,
+      limitation: safeStageLimitation("Coverage repair", failure.kind, sliceId),
+      diagnostics: failure.diagnostics,
+    };
+  }
 }
 
 function sliceSummary(result: CodeSliceResult): CodeSliceSummary {
@@ -440,61 +970,105 @@ export async function runReviewPipeline(options: {
       (file.oldPath === null ||
         !artifactPaths.has(file.oldPath.replaceAll("\\", "/").toLowerCase())),
   );
+  const changedFileInventory = reviewFiles.map((file) => ({
+    path: file.path,
+    status: file.status,
+    binary: file.binary,
+    truncated: file.truncated,
+  }));
   const slices = createReviewSlices(reviewFiles, sddResponse.data.criteria);
   await progress("code_exploration", 45);
-  const sliceResults = await runCodeSlices({
+  let sliceResults = await runCodeSlices({
     slices,
-    changedFileInventory: reviewFiles.map((file) => ({
-      path: file.path,
-      status: file.status,
-      binary: file.binary,
-      truncated: file.truncated,
-    })),
+    changedFileInventory,
     context: options.context,
     sdd: sddResponse.data,
     client: options.client,
     signal: options.signal,
   });
   diagnostics.push(...sliceResults.flatMap((result) => result.diagnostics));
-  const incompleteSlices = sliceResults.filter((result) => result.status === "incomplete");
   await progress("evidence_verification", 68);
   let findings = verifyFindings(
     options.context.snapshot,
-    findingsFromCompletedSlices(sliceResults),
+    findingsFromCompletedSlices(sliceResults, sddResponse.data.criteria),
   );
+  const initialImplementationCandidates = [
+    ...coverageFromCompletedSlices(sliceResults, "implementation", findings),
+    ...coverageFromFindings(findings, "implementation", sddResponse.data.criteria),
+  ];
+  const omittedCriteria = omittedImplementationCriteria({
+    snapshot: options.context.snapshot,
+    criteria: sddResponse.data.criteria,
+    candidates: initialImplementationCandidates,
+    findings,
+  });
+  const implementationExplorationComplete = !sliceResults.some(
+    (result) => result.status === "incomplete" && result.sliceKind === "implementation",
+  );
+  if (omittedCriteria.length > 0 && implementationExplorationComplete) {
+    await progress("coverage_repair", 72);
+    const repair = await runCoverageRepair({
+      criteria: omittedCriteria,
+      implementationFiles: reviewFiles.filter(
+        (file) => sliceKindOf(file.path) === "implementation",
+      ),
+      evidenceHints: initialImplementationCandidates,
+      context: options.context,
+      sdd: sddResponse.data,
+      client: options.client,
+      signal: options.signal,
+    });
+    diagnostics.push(...repair.diagnostics);
+    sliceResults = [...sliceResults, repair];
+    findings = verifyFindings(
+      options.context.snapshot,
+      findingsFromCompletedSlices(sliceResults, sddResponse.data.criteria),
+    );
+  }
+  const incompleteSlices = sliceResults.filter((result) => result.status === "incomplete");
   const material = findings.filter(
-    (finding) => finding.severity === "critical" || finding.severity === "high",
+    (finding) =>
+      (finding.impact === "implementation" &&
+        (finding.severity === "critical" || finding.severity === "high")) ||
+      (finding.impact === "maintainability" &&
+        sddResponse.data.criteria.some((criterion) => finding.claim.includes(criterion.id))),
   );
   if (material.length > 0) {
     try {
       const semantic = await options.client.run({
         role: "semantic_verifier",
         system: PROMPTS.verifier,
-        payload: { criteria: sddResponse.data.criteria, findings },
+        payload: { criteria: sddResponse.data.criteria, findings: material },
         schema: semanticVerificationSchema,
-        maxTokens: 3_000,
+        maxTokens: 2_000,
         signal: options.signal,
       });
       diagnostics.push(...semantic.diagnostics);
       const decisions = new Map(
         semantic.data.decisions.map((decision) => [decision.findingId, decision]),
       );
+      const materialIds = new Set(material.map((finding) => finding.id));
       const validCriterionIds = new Set(sddResponse.data.criteria.map((criterion) => criterion.id));
       findings = findings.flatMap((finding) => {
         const decision = decisions.get(finding.id);
         if (decision === undefined) {
-          return finding.severity === "critical" || finding.severity === "high" ? [] : [finding];
+          return materialIds.has(finding.id) ? [] : [finding];
         }
         if (!decision.confirmed) return [];
         const criterionIds =
           decision.adjustedImpact === "maintainability"
             ? []
             : decision.confirmedCriterionIds.filter((id) => validCriterionIds.has(id));
+        const { testCoverageStatus: _previousTestCoverageStatus, ...findingWithoutTestStatus } =
+          finding;
         return [
           {
-            ...finding,
+            ...findingWithoutTestStatus,
             severity: decision.adjustedSeverity,
             impact: decision.adjustedImpact,
+            ...(decision.adjustedImpact === "test_coverage"
+              ? { testCoverageStatus: decision.testCoverageStatus ?? "missing" }
+              : {}),
             criterionIds,
             verified: true,
           },
@@ -509,8 +1083,9 @@ export async function runReviewPipeline(options: {
       if (options.signal.aborted) throw error;
     }
   }
+  findings = withStableFindingIds(findings.map(applySeverityCap).map(normalizeTestCoverageFinding));
 
-  await progress("synthesis", 82);
+  await progress("deterministic_synthesis", 82);
   const implementationCandidates = [
     ...coverageFromCompletedSlices(sliceResults, "implementation", findings),
     ...coverageFromFindings(findings, "implementation", sddResponse.data.criteria),
@@ -523,94 +1098,25 @@ export async function runReviewPipeline(options: {
     context: options.context,
     sdd: sddResponse.data,
     candidates: implementationCandidates,
-    hasIncompleteSlices: incompleteSlices.some((result) => result.sliceKind === "implementation"),
+    findings,
+    dimension: "implementation",
+    hasIncompleteSlices: incompleteSlices.some(
+      (result) => result.sliceKind === "implementation" && result.sliceId !== "coverage-repair-1",
+    ),
   });
   const testCoverage = deterministicCoverage({
     context: options.context,
     sdd: sddResponse.data,
     candidates: testCandidates,
+    findings,
+    dimension: "tests",
     hasIncompleteSlices: incompleteSlices.some((result) => result.sliceKind === "tests"),
   });
-  let risks: string[];
-  let synthesisPending: string[];
-  try {
-    const synthesis = await options.client.run({
-      role: "synthesizer",
-      system: PROMPTS.synthesizer,
-      payload: {
-        criteria: sddResponse.data.criteria.map(({ id, description, required }) => ({
-          id,
-          description,
-          required,
-        })),
-        findings: findings.map((finding) => ({
-          id: finding.id,
-          severity: finding.severity,
-          category: finding.category,
-          impact: finding.impact,
-          claim: finding.claim,
-          confidence: finding.confidence,
-          criterionIds: finding.criterionIds,
-          evidence: finding.evidence.map(({ revision, path, startLine, endLine }) => ({
-            revision,
-            path,
-            startLine,
-            endLine,
-          })),
-        })),
-        implementationCoverage: coverage.map((item) => ({
-          criterionId: item.criterionId,
-          status: item.status,
-          notes: item.notes,
-          evidence: item.evidence.map(({ revision, path, startLine, endLine }) => ({
-            revision,
-            path,
-            startLine,
-            endLine,
-          })),
-        })),
-        testCoverage: testCoverage.map((item) => ({
-          criterionId: item.criterionId,
-          status: item.status,
-          notes: item.notes,
-          evidence: item.evidence.map(({ revision, path, startLine, endLine }) => ({
-            revision,
-            path,
-            startLine,
-            endLine,
-          })),
-        })),
-        conflicts: sddResponse.data.conflicts.map((description, index) => ({
-          index,
-          description,
-        })),
-        limitations: [
-          ...options.context.limitations,
-          ...globalAgentLimitations(sliceResults),
-          ...incompleteSlices.map((result) => result.limitation),
-        ],
-      },
-      schema: synthesisSchema,
-      maxTokens: 2_500,
-      signal: options.signal,
-    });
-    diagnostics.push(...synthesis.diagnostics);
-    risks = synthesis.data.risks;
-    synthesisPending = synthesis.data.pendingDecisions
-      .filter((decision) =>
-        decision.conflictIndexes.every((index) => index < sddResponse.data.conflicts.length),
-      )
-      .map((decision) => decision.question);
-  } catch (error) {
-    const failure = classifiedFailure(error);
-    diagnostics.push(...failure.diagnostics);
-    postStagesIncomplete.push("synthesis");
-    postStageLimitations.push(safeStageLimitation("Synthesis", failure.kind));
-    postPendingDecisions.push("Coverage synthesis did not complete; deterministic fallback used.");
-    risks = [];
-    synthesisPending = [];
-    if (options.signal.aborted) throw error;
-  }
+  const risks = findings
+    .filter((finding) => finding.verified)
+    .map((finding) => finding.claim)
+    .filter((claim, index, all) => all.indexOf(claim) === index)
+    .slice(0, 20);
 
   const limitations = [
     ...options.context.limitations,
@@ -642,7 +1148,7 @@ export async function runReviewPipeline(options: {
   ];
   const status: ReviewStatus = stagesIncomplete.length > 0 ? "incomplete" : "completed";
   const pendingDecisions = [
-    ...(synthesisPending.length > 0 ? synthesisPending : sddResponse.data.conflicts),
+    ...sddResponse.data.conflicts,
     ...postPendingDecisions,
     ...(incompleteSlices.length > 0
       ? ["Zero findings does not mean zero defects: part of the change was not reviewed."]

@@ -139,11 +139,11 @@ describe("HTML report", () => {
   test("separates implementation and test coverage and exposes the reviewer version", () => {
     const html = renderReportHtml({
       ...report,
-      schemaVersion: "1.3",
-      reviewerVersion: "0.4.1",
+      schemaVersion: "1.4",
+      reviewerVersion: "0.4.9",
     });
     expect(html).toContain("Cobertura de implementación");
     expect(html).toContain("Cobertura de pruebas");
-    expect(html).toContain("0.4.1 / 1.3");
+    expect(html).toContain("0.4.9 / 1.4");
   });
 });

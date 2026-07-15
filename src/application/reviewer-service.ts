@@ -17,7 +17,7 @@ import { ReportStore } from "../report/report-store.ts";
 import { createProvider } from "../repository/provider-factory.ts";
 import { buildReviewContext } from "../review/context-builder.ts";
 import { type PipelineResult, runReviewPipeline } from "../review/pipeline.ts";
-import { calculateVerdict } from "../review/verdict.ts";
+import { calculateVerdict, isBlockingFinding } from "../review/verdict.ts";
 import { loadArtifacts } from "../sdd/artifact-loader.ts";
 import { resolveFeature } from "../sdd/feature-resolver.ts";
 import { UsageBudget } from "../security/budget.ts";
@@ -435,7 +435,7 @@ export class ReviewerService {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.config.reportTtlHours * 60 * 60 * 1_000);
     const report: ReviewReport = reviewReportSchema.parse({
-      schemaVersion: "1.3",
+      schemaVersion: "1.4",
       reviewerVersion: APP_VERSION,
       reviewId,
       createdAt: now.toISOString(),
@@ -473,11 +473,7 @@ export class ReviewerService {
     const reportPath = await this.reports.write(report, reviewSignal, input.openReport ?? true);
     await this.reports.cleanupExpired(this.config.reportTtlHours, reviewSignal);
     await progress("completed", 100);
-    const blockingFindingCount = pipeline.findings.filter(
-      (finding) =>
-        finding.severity === "critical" ||
-        (finding.severity === "high" && finding.criterionIds.length > 0),
-    ).length;
+    const blockingFindingCount = pipeline.findings.filter(isBlockingFinding).length;
     const topFindings = pipeline.findings.slice(0, 10).flatMap((finding) => {
       const evidence = finding.evidence[0];
       if (evidence === undefined) return [];

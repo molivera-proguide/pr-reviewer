@@ -116,11 +116,15 @@ export type Severity = z.infer<typeof severitySchema>;
 export const findingImpactSchema = z.enum(["implementation", "test_coverage", "maintainability"]);
 export type FindingImpact = z.infer<typeof findingImpactSchema>;
 
+export const testCoverageStatusSchema = z.enum(["partial", "missing"]);
+export type TestCoverageStatus = z.infer<typeof testCoverageStatusSchema>;
+
 export const findingSchema = z.object({
   id: z.string().min(1),
   severity: severitySchema,
   category: z.string().min(1),
   impact: findingImpactSchema.optional(),
+  testCoverageStatus: testCoverageStatusSchema.optional(),
   claim: z.string().min(1),
   evidence: z.array(evidenceSchema).min(1),
   confidence: z.number().min(0).max(1),
@@ -234,7 +238,7 @@ export const codeSliceSummarySchema = z.object({
 export type CodeSliceSummary = z.infer<typeof codeSliceSummarySchema>;
 
 export const reviewReportSchema = z.object({
-  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3"]),
+  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3", "1.4"]),
   reviewerVersion: z.string().min(1).optional(),
   reviewId: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),

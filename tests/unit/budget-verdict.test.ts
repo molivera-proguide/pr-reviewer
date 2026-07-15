@@ -8,6 +8,7 @@ const highFinding: Finding = {
   id: "F-1",
   severity: "high",
   category: "contract",
+  impact: "implementation",
   claim: "Required behavior is missing.",
   evidence: [
     {

@@ -11,11 +11,28 @@ implementation findings deterministically mark their affected SDD criteria as mi
 an exploratory coverage row claimed otherwise. SDD artifacts are analyzed only by the SDD role and
 are excluded from code slices.
 
+Contractual findings are criterion-specific: one finding can reference at most one SDD criterion.
+Test-coverage findings are capped at `medium`, maintainability findings at `low`, and only verified
+implementation findings can block. When a completed explorer omits required implementation
+criteria, the pipeline may issue one bounded, implementation-only coverage repair before the
+deterministic final projection.
+Contractual finding IDs are derived from immutable revision, impact, and criterion rather than
+model wording. Test findings distinguish partial assertions from complete absence of assertions.
+Assertion-bearing evidence deterministically prevents a confirmed test gap from being classified
+as completely missing. Ambiguous or conflicting implementation coverage is never promoted to
+covered; it is repaired once through a criterion-keyed `covered`/`defect` contract.
+Only blocking implementation candidates and ambiguous contractual maintainability claims reach
+the Sonnet semantic verifier. Risks and SDD-conflict decisions are projected locally, removing the
+final model synthesis call; a normal review with repair therefore uses at most five calls.
+Test slices use a compact criterion-keyed contract that binds `covered`, `partial`, `missing`, or
+`not_verifiable` to its evidence and, for gaps, its finding metadata. An accepted repair supersedes
+only earlier ambiguous assessments for the criteria it explicitly repaired.
+
 Partial implementation coverage requires a matching verified defect or an objectively
 incomplete/conflicting slice; test coverage remains partial unless its complete assertions are
 directly supported. Test visibility cannot downgrade implementation coverage. Expected slice isolation and
-missing optional root artifacts stay out of global limitations, while synthesized Tech Lead
-decisions must reference an extracted SDD conflict.
+missing optional root artifacts stay out of global limitations, while Tech Lead decisions come
+only from extracted SDD conflicts.
 
 ## Requirements
 

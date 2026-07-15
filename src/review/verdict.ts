@@ -1,17 +1,21 @@
 import type { Finding, ReviewStatus, Verdict } from "../domain/contracts.ts";
 
+export function isBlockingFinding(finding: Finding): boolean {
+  return (
+    finding.verified &&
+    finding.impact === "implementation" &&
+    (finding.severity === "critical" ||
+      (finding.severity === "high" && finding.criterionIds.length > 0))
+  );
+}
+
 export function calculateVerdict(options: {
   status: ReviewStatus;
   findings: readonly Finding[];
   pendingDecisions: readonly string[];
   sddApproved: boolean;
 }): Verdict {
-  const blocking = options.findings.some(
-    (finding) =>
-      finding.verified &&
-      (finding.severity === "critical" ||
-        (finding.severity === "high" && finding.criterionIds.length > 0)),
-  );
+  const blocking = options.findings.some(isBlockingFinding);
   if (blocking) {
     return "RIESGO_BLOQUEANTE";
   }

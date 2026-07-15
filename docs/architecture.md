@@ -36,24 +36,55 @@ The domain never imports MCP, Anthropic, or provider CLI response types. The app
 The deterministic TypeScript pipeline remains the control plane. It schedules all stages, enforces
 budgets, and computes coverage and the verdict; no model can execute a command or choose a provider
 operation. Haiku 4.5 handles the isolated `sdd_explorer` and `code_explorer` roles. Sonnet 5 handles
-`semantic_verifier` and the final semantic `synthesizer`/orchestrator at explicitly bounded effort.
+only material implementation findings and ambiguous contractual claims in `semantic_verifier` at
+explicitly bounded effort. Test gaps do not enter that expensive semantic call because their
+severity and verdict effect are deterministic.
 
 Implementation and test coverage are aggregated separately and verified deterministically before
-synthesis. Code slices never mix production and test files, every explorer receives a bounded
+the final projection. Code slices never mix production and test files, every explorer receives a bounded
 global changed-file inventory, and SDD artifacts are excluded from code exploration. A verified
 implementation or test-coverage finding overrides optimistic coverage for the affected criterion.
-Stable finding IDs and evidence-based deduplication keep cross-slice synthesis consistent. The Sonnet orchestrator
-receives compact evidence references and returns only cross-cutting risks and Tech Lead decisions.
-This prevents a failed synthesis from discarding verified findings or turning an incomplete review
-green.
+Stable finding IDs and evidence-based deduplication keep the cross-slice projection consistent. The
+Sonnet verifier receives only compact evidence for findings that can block or may be contractually
+misclassified. Risks are stable verified finding claims and pending decisions are extracted SDD
+conflicts, so no final model synthesis call can add cost or turn an incomplete review green.
 
 Semantic verification may correct severity, impact, and criterion associations for every finding
 included in a material review. A partial implementation coverage row without a verified defect is
-normalized to covered when its evidence is valid; partial test coverage is never promoted
-automatically because some test evidence does not prove every obligation is asserted. Missing
+kept `not_verifiable` and becomes eligible for the single repair; partial test coverage is never
+promoted to covered because some test evidence does not prove every obligation is asserted. Missing
 behavior must be represented by a verified finding. Agent limitations are scoped, and expected isolation between completed slices is
-not promoted to a report-level limitation. Synthesized pending decisions are accepted only when
-they reference an extracted SDD conflict.
+not promoted to a report-level limitation. Pending decisions come only from extracted SDD conflicts.
+
+Each contractual finding is associated with at most one extracted criterion. Severity is capped
+deterministically by impact after semantic verification: test coverage at `medium` and
+maintainability at `low`. Only verified implementation findings can block. If every implementation
+slice completed but required criteria were omitted, one bounded `coverage-repair-1` explorer call
+receives only those criteria and implementation files. Its evidence and criterion IDs are verified
+before aggregation; any incomplete repair keeps the review non-green without discarding completed
+slices.
+
+Contractual finding IDs use immutable revision, impact, and criterion as their canonical identity,
+so wording, category, confidence, and evidence-range variation do not rename the same defect.
+Test-coverage findings carry an explicit `partial` or `missing` status: partial means relevant
+assertions exist but do not cover every required scenario, while missing means no relevant
+assertion exists.
+
+The pipeline normalizes a confirmed test gap to `partial` only when assertion-bearing evidence also
+shares criterion-specific terms with its claim; unrelated assertions do not convert true absence
+to partial. Implementation coverage is positive only when a slice returns one
+coherent `covered` assessment or a verified criterion-specific finding explains the defect.
+Ambiguous, duplicate, or unsupported partial assessments become `not_verifiable` and are eligible
+for the single directed repair. That repair uses a dedicated compact schema with exactly one
+criterion-keyed outcome: `covered` with evidence or `defect` with evidence and finding metadata.
+Accepted repair outcomes supersede earlier `not_verifiable` or unsupported partial candidates only
+for the explicitly requested criteria; verified defects remain authoritative.
+
+Test slices use a separate compact structured-output contract with exactly one assessment per
+assigned criterion. `partial` and `missing` carry their finding claim, action, confidence, and exact
+test evidence in the same object, eliminating cross-array mismatches without another model call.
+Equivalent duplicate outcomes are consolidated locally; missing, conflicting, or invalid-evidence
+assessments make only that slice incomplete with a bounded safe reason.
 
 ## Structured-output resilience
 
@@ -64,8 +95,8 @@ schema-repair attempt and is never logged or persisted.
 
 `max_tokens` recovery is role-aware. SDD extraction may retry once with a compact payload. A
 multi-file code slice is divided into bounded child slices, while an indivisible truncated slice is
-marked incomplete. Semantic verification and synthesis do not repeat a truncated request;
-synthesis falls back immediately to deterministic coverage. Reports include a local USD estimate
+marked incomplete. Semantic verification does not repeat a truncated request, and final projection
+is always local and deterministic. Reports include a local USD estimate
 based on the bundled, dated public Anthropic price table and label whether all model rates were
 known.
 

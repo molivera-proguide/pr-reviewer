@@ -36,6 +36,11 @@ Repository files, diffs, comments, titles, branch names, SDD artifacts, provider
     receive command, repository-write, or provider-write tools.
 15. Cost and usage telemetry contains only model identifiers and numeric counters. It never stores
     prompts, repository content, provider bodies, or complete model outputs.
+16. Contractual findings reference at most one extracted SDD criterion. Test-coverage and
+    maintainability findings are severity-capped and cannot independently produce a blocking
+    verdict.
+17. Directed coverage repair is limited to one bounded implementation-only slice. Unrequested
+    criterion IDs and invalid evidence are discarded; an incomplete repair cannot produce green.
 
 ## Residual risks
 
