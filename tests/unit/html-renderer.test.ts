@@ -4,6 +4,7 @@ import { escapeHtml, renderReportHtml } from "../../src/report/html-renderer.ts"
 
 const report: ReviewReport = {
   schemaVersion: "1.0",
+  reviewScope: "implementation",
   reviewId: "review-1",
   createdAt: "2026-07-13T00:00:00.000Z",
   expiresAt: "2026-07-14T00:00:00.000Z",
@@ -54,6 +55,7 @@ describe("HTML report", () => {
       slices: _slices,
       attemptDiagnostics: _diagnostics,
       testCoverage: _testCoverage,
+      reviewScope: _reviewScope,
       ...legacy
     } = report;
     const parsed = reviewReportSchema.parse(legacy);
@@ -139,11 +141,31 @@ describe("HTML report", () => {
   test("separates implementation and test coverage and exposes the reviewer version", () => {
     const html = renderReportHtml({
       ...report,
-      schemaVersion: "1.4",
-      reviewerVersion: "0.4.9",
+      schemaVersion: "1.5",
+      reviewerVersion: "0.5.0",
     });
     expect(html).toContain("Cobertura de implementación");
     expect(html).toContain("Cobertura de pruebas");
-    expect(html).toContain("0.4.9 / 1.4");
+    expect(html).toContain("0.5.0 / 1.5");
+  });
+
+  test("labels test-only reports without presenting implementation as failed", () => {
+    const html = renderReportHtml({
+      ...report,
+      schemaVersion: "1.5",
+      reviewScope: "test_only",
+      coverage: [
+        {
+          criterionId: "AC-001",
+          description: "Behavior remains outside this change.",
+          status: "not_verifiable",
+          evidence: [],
+          notes: "Implementation is outside the scope of this test-only change.",
+        },
+      ],
+    });
+    expect(html).toContain("PR test-only");
+    expect(html).toContain("Implementación fuera de alcance");
+    expect(html).toContain("Revisión de tests");
   });
 });

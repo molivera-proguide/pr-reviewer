@@ -47,29 +47,24 @@ class FakeAgentClient implements StructuredAgentClient {
         sddApproved: true,
       },
       code_explorer: {
-        findings: [
-          {
-            id: "F-001",
-            severity: "high",
-            category: "authorization",
-            impact: "implementation",
-            claim: "The implementation authorizes every caller.",
-            evidence: [evidence],
-            confidence: 0.99,
-            suggestedAction: "Check the caller policy before returning true.",
-            criterionIds: ["AC-001"],
-          },
-        ],
-        coverage: [
+        reviews: [
           {
             criterionId: "AC-001",
-            dimension: "implementation",
-            description: "Deny unauthorized users",
-            status: "covered",
-            evidence: [evidence],
-            notes: "Always allows.",
+            implementation: {
+              status: "defect",
+              finding: {
+                id: "F-001",
+                severity: "high",
+                category: "authorization",
+                claim: "The implementation authorizes every caller.",
+                evidence: [evidence],
+                confidence: 0.99,
+                suggestedAction: "Check the caller policy before returning true.",
+              },
+            },
           },
         ],
+        maintainabilityFindings: [],
         limitations: [],
       },
       semantic_verifier: {
@@ -85,19 +80,6 @@ class FakeAgentClient implements StructuredAgentClient {
             confirmedCriterionIds: ["AC-001"],
           },
         ],
-      },
-      synthesizer: {
-        coverage: [
-          {
-            criterionId: "AC-001",
-            description: "Deny unauthorized users",
-            status: "missing",
-            evidence: [evidence],
-            notes: "The required denial path is absent.",
-          },
-        ],
-        risks: ["Authorization bypass"],
-        pendingDecisions: [],
       },
     } as const;
     return {
@@ -204,10 +186,13 @@ describe("complete review pipeline", () => {
     expect(result.coverage[0]?.status).toBe("missing");
     expect(result.testCoverage[0]?.status).toBe("not_verifiable");
     const codePayload = client.codePayloads[0] as {
-      slice: { files: { path: string }[] };
+      slice: { implementationFiles: { path: string }[]; testFiles: { path: string }[] };
       changedFileInventory: { path: string }[];
     };
-    expect(codePayload.slice.files.map((file) => file.path)).toEqual(["src/authorize.ts"]);
+    expect(codePayload.slice.implementationFiles.map((file) => file.path)).toEqual([
+      "src/authorize.ts",
+    ]);
+    expect(codePayload.slice.testFiles).toEqual([]);
     expect(codePayload.changedFileInventory.map((file) => file.path)).toEqual(["src/authorize.ts"]);
     expect(result.usage.calls).toBe(3);
     expect(result.slices).toEqual([

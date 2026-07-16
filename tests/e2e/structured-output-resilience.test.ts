@@ -38,10 +38,7 @@ function attempt(
 ): AttemptSummary {
   return {
     role: request.role,
-    model:
-      request.role === "semantic_verifier" || request.role === "synthesizer"
-        ? "claude-sonnet-5"
-        : "claude-haiku-4-5-20251001",
+    model: request.role === "semantic_verifier" ? "claude-sonnet-5" : "claude-haiku-4-5-20251001",
     ...(request.sliceId === undefined ? {} : { sliceId: request.sliceId }),
     attempt: 1,
     status,
@@ -162,7 +159,7 @@ function findings() {
 function misclassifiedAc4Finding() {
   return {
     id: "F-AC-004",
-    severity: "medium" as const,
+    severity: "low" as const,
     category: "maintainability",
     impact: "maintainability" as const,
     claim: "The explicit AC-004 total invariant is not enforced.",
@@ -196,6 +193,8 @@ class RegressionClient implements StructuredAgentClient {
       invalidRepairEvidence?: boolean;
       ambiguousCriterionId?: string;
       testGapStatus?: "partial" | "missing";
+      omitTestGapMetadata?: boolean;
+      crossDimensionTestEvidence?: boolean;
     } = {},
   ) {}
 
@@ -233,9 +232,16 @@ class RegressionClient implements StructuredAgentClient {
       this.completedSlices.push(request.sliceId);
     }
     const primarySlice = request.sliceId === "slice-1" || request.sliceId === "slice-1.1";
-    const testSlice =
-      (request.payload as { slice?: { kind?: "implementation" | "tests" } }).slice?.kind ===
-      "tests";
+    const requestSlice = (
+      request.payload as {
+        slice?: {
+          scope?: "implementation" | "test_only";
+          testFiles?: { path: string }[];
+        };
+      }
+    ).slice;
+    const testOnlySlice = requestSlice?.scope === "test_only";
+    const hasRelatedTests = (requestSlice?.testFiles?.length ?? 0) > 0;
     const repairCriteria =
       (
         request.payload as {
@@ -304,23 +310,67 @@ class RegressionClient implements StructuredAgentClient {
     const codeFindings = primarySlice
       ? [...findings(), ...(this.includeMisclassifiedAc4 ? [misclassifiedAc4Finding()] : [])]
       : [];
-    const testAssessments = criteria.map((criterion) =>
+    const testObservations = criteria.map((criterion) =>
       criterion.id === "AC-003" && testGapStatus !== undefined
         ? {
-            criterionId: criterion.id,
             status: testGapStatus,
-            evidence: [testEvidence],
+            evidence: [this.repairBehavior.crossDimensionTestEvidence ? evidence : testEvidence],
             notes: "The Gold cap assertion is incomplete.",
-            claim: "The Gold cap has no boundary assertion.",
-            confidence: 0.9,
-            suggestedAction: "Add the missing boundary assertion.",
+            ...(this.repairBehavior.omitTestGapMetadata
+              ? {}
+              : {
+                  claim: "The Gold cap has no boundary assertion.",
+                  confidence: 0.9,
+                  suggestedAction: "Add the missing boundary assertion.",
+                }),
           }
         : {
-            criterionId: criterion.id,
             status: "not_verifiable" as const,
-            evidence: [],
             notes: "This fixture does not assess the criterion in tests.",
           },
+    );
+    const implementationReviews: Record<string, unknown>[] = criteria.flatMap(
+      (criterion, index): Record<string, unknown>[] => {
+        const defect = codeFindings.find((finding) => finding.criterionIds[0] === criterion.id);
+        if (defect !== undefined) {
+          return [
+            {
+              criterionId: criterion.id,
+              implementation: {
+                status: "defect" as const,
+                finding: {
+                  id: defect.id,
+                  severity: defect.severity,
+                  category: defect.category,
+                  claim: defect.claim,
+                  evidence: defect.evidence,
+                  confidence: defect.confidence,
+                  suggestedAction: defect.suggestedAction,
+                },
+              },
+              ...(hasRelatedTests ? { tests: testObservations[index] } : {}),
+            },
+          ];
+        }
+        if (
+          !primarySlice ||
+          this.omitCoverage ||
+          criterion.id === this.repairBehavior.ambiguousCriterionId
+        ) {
+          return [];
+        }
+        return [
+          {
+            criterionId: criterion.id,
+            implementation: {
+              status: "covered" as const,
+              evidence: [evidence],
+              notes: "Sanitized deterministic fixture.",
+            },
+            ...(hasRelatedTests ? { tests: testObservations[index] } : {}),
+          },
+        ];
+      },
     );
     const values = {
       sdd_explorer: {
@@ -335,26 +385,20 @@ class RegressionClient implements StructuredAgentClient {
       code_explorer:
         request.sliceId === "coverage-repair-1"
           ? { assessments: repairAssessments }
-          : testSlice
-            ? { assessments: testAssessments, limitations: [] }
+          : testOnlySlice
+            ? {
+                assessments: criteria.map((criterion, index) => ({
+                  criterionId: criterion.id,
+                  observation: testObservations[index],
+                })),
+                maintainabilityFindings: [],
+                limitations: [],
+              }
             : {
-                findings: codeFindings,
-                coverage:
-                  primarySlice && !this.omitCoverage
-                    ? criteria.map((criterion) => ({
-                        criterionId: criterion.id,
-                        dimension: "implementation" as const,
-                        description: criterion.description,
-                        status:
-                          criterion.id === this.repairBehavior.ambiguousCriterionId
-                            ? ("partial" as const)
-                            : criterion.id === "AC-002" || criterion.id === "AC-003"
-                              ? ("missing" as const)
-                              : ("covered" as const),
-                        evidence: [evidence],
-                        notes: "Sanitized deterministic fixture.",
-                      }))
-                    : [],
+                reviews: implementationReviews,
+                maintainabilityFindings: this.includeMisclassifiedAc4
+                  ? [misclassifiedAc4Finding()]
+                  : [],
                 limitations: [
                   {
                     scope: "slice_isolation" as const,
@@ -393,22 +437,6 @@ class RegressionClient implements StructuredAgentClient {
               ? ["AC-002"]
               : finding.criterionIds,
         })),
-      },
-      synthesizer: {
-        coverage: criteria.map((criterion) => ({
-          criterionId: criterion.id,
-          description: criterion.description,
-          status: criterion.id === "AC-002" || criterion.id === "AC-003" ? "missing" : "covered",
-          evidence: [evidence],
-          notes: "Sanitized deterministic fixture.",
-        })),
-        risks: ["Incorrect customer discount"],
-        pendingDecisions: [
-          {
-            question: "Should ordinary implementation choices be escalated?",
-            conflictIndexes: [0],
-          },
-        ],
       },
     } as const;
     return {
@@ -490,17 +518,24 @@ describe("structured-output resilience regression", () => {
     ).toBe("RIESGO_BLOQUEANTE");
   });
 
-  test("lets semantic verification reclassify an explicit criterion violation", async () => {
+  test("keeps ordinary maintainability out of semantic verification", async () => {
     const usage = budget();
+    const client = new RegressionClient(usage, null, "refusal", null, false, true);
     const result = await runReviewPipeline({
       context: context(snapshot()),
-      client: new RegressionClient(usage, null, "refusal", null, false, true),
+      client,
       budget: usage,
       signal: new AbortController().signal,
     });
-    const ac4 = result.findings.find((finding) => finding.criterionIds.includes("AC-004"));
-    expect(ac4?.impact).toBe("implementation");
-    expect(result.coverage.find((item) => item.criterionId === "AC-004")?.status).toBe("missing");
+    const maintainability = result.findings.find((finding) => finding.impact === "maintainability");
+    expect(maintainability?.severity).toBe("low");
+    expect(maintainability?.criterionIds).toEqual([]);
+    const semanticPayload = client.semanticPayloads[0] as
+      | { findings?: { impact?: string }[] }
+      | undefined;
+    expect(semanticPayload?.findings?.every((finding) => finding.impact === "implementation")).toBe(
+      true,
+    );
   });
 
   test("does not promote partial test coverage to covered", async () => {
@@ -538,10 +573,13 @@ describe("structured-output resilience regression", () => {
     ).toBeTrue();
     expect(client.repairRequests[0]?.maxTokens).toBeLessThan(4_000);
     const repairPayload = client.repairRequests[0]?.payload as
-      | { slice?: { files?: { path: string }[] } }
+      | { slice?: { implementationFiles?: { path: string }[]; testFiles?: { path: string }[] } }
       | undefined;
-    expect(repairPayload?.slice?.files?.every((file) => !file.path.includes("test"))).toBeTrue();
-    expect(result.usage.calls).toBeLessThanOrEqual(5);
+    expect(
+      repairPayload?.slice?.implementationFiles?.every((file) => !file.path.includes("test")),
+    ).toBeTrue();
+    expect(repairPayload?.slice?.testFiles).toEqual([]);
+    expect(result.usage.calls).toBeLessThanOrEqual(4);
   });
 
   test("lets an accepted repair supersede an earlier ambiguous assessment", async () => {
@@ -593,7 +631,7 @@ describe("structured-output resilience regression", () => {
     expect(result.slices).toContainEqual(
       expect.objectContaining({ id: "coverage-repair-1", status: "completed" }),
     );
-    expect(result.usage.calls).toBeLessThanOrEqual(5);
+    expect(result.usage.calls).toBeLessThanOrEqual(4);
   });
 
   test("reports a safe repair rejection reason for invalid evidence", async () => {
@@ -729,6 +767,68 @@ describe("structured-output resilience regression", () => {
     expect(result.coverage.find((item) => item.criterionId === "AC-003")?.status).toBe("missing");
   });
 
+  test("rejects valid snapshot evidence when it crosses the slice dimension", async () => {
+    const usage = budget();
+    const result = await runReviewPipeline({
+      context: context(snapshot(["src/discount.ts", "tests/discount.test.ts"])),
+      client: new RegressionClient(usage, null, "refusal", null, false, false, false, {
+        testGapStatus: "partial",
+        crossDimensionTestEvidence: true,
+      }),
+      budget: usage,
+      signal: new AbortController().signal,
+    });
+    expect(result.findings.some((finding) => finding.impact === "test_coverage")).toBeFalse();
+    expect(result.testCoverage.find((item) => item.criterionId === "AC-003")?.status).toBe(
+      "not_verifiable",
+    );
+    expect(result.coverage.find((item) => item.criterionId === "AC-003")?.status).toBe("missing");
+    expect(result.slices.some((slice) => slice.id === "coverage-repair-1")).toBeFalse();
+  });
+
+  test("reviews test-only changes explicitly without functional incompleteness or repair", async () => {
+    const usage = budget();
+    const client = new RegressionClient(usage, null, "refusal", null, false, false, false, {
+      testGapStatus: "partial",
+      omitTestGapMetadata: true,
+    });
+    const result = await runReviewPipeline({
+      context: context(snapshot(["tests/discount.test.ts"])),
+      client,
+      budget: usage,
+      signal: new AbortController().signal,
+    });
+    const gap = result.findings.find((finding) => finding.criterionIds[0] === "AC-003");
+    expect(result.reviewScope).toBe("test_only");
+    expect(result.status).toBe("completed");
+    expect(result.coverage.every((item) => item.status === "not_verifiable")).toBeTrue();
+    expect(result.coverage.every((item) => item.notes.includes("outside the scope"))).toBeTrue();
+    expect(gap).toEqual(
+      expect.objectContaining({
+        impact: "test_coverage",
+        severity: "medium",
+        testCoverageStatus: "partial",
+        claim: "The Gold cap assertion is incomplete.",
+        confidence: 0.7,
+        suggestedAction: "Add criterion-specific assertions for AC-003.",
+      }),
+    );
+    expect(result.slices).toEqual([
+      expect.objectContaining({ scope: "test_only", status: "completed" }),
+    ]);
+    expect(client.startedSlices).toEqual(["slice-1"]);
+    expect(client.startedSlices).not.toContain("coverage-repair-1");
+    expect(result.usage.calls).toBe(2);
+    expect(
+      calculateVerdict({
+        status: result.status,
+        findings: result.findings,
+        pendingDecisions: result.pendingDecisions,
+        sddApproved: result.sdd.sddApproved,
+      }),
+    ).toBe("REQUIERE_DECISION");
+  });
+
   test("produces stable semantic projections across three runs of the same SHA", async () => {
     const projections = [];
     for (let run = 0; run < 3; run += 1) {
@@ -767,11 +867,12 @@ describe("structured-output resilience regression", () => {
     }
     expect(projections[1]).toEqual(projections[0]);
     expect(projections[2]).toEqual(projections[0]);
-    expect(projections[0]?.usage.calls).toBeLessThanOrEqual(5);
+    expect(projections[0]?.usage.calls).toBeLessThanOrEqual(4);
     expect(projections[0]?.cost.amount).toBeLessThan(0.1);
+    expect(projections[0]?.cost.failedAttemptAmount).toBe(0);
   });
 
-  test("preserves four criteria and successful slices when one of three slices refuses", async () => {
+  test("preserves all criteria and successful slices when one domain slice refuses", async () => {
     const usage = budget();
     const result = await runReviewPipeline({
       context: context(snapshot(["src/discount.ts", "tests/discount.test.ts", "docs/discount.md"])),
@@ -781,14 +882,8 @@ describe("structured-output resilience regression", () => {
     });
     expect(result.status).toBe("incomplete");
     expect(result.coverage).toHaveLength(4);
-    expect(result.coverage.filter((item) => item.status === "missing")).toHaveLength(2);
-    expect(result.coverage.filter((item) => item.status === "partial")).toHaveLength(2);
-    expect(result.findings).toHaveLength(2);
-    expect(result.slices.map((slice) => slice.status)).toEqual([
-      "completed",
-      "incomplete",
-      "completed",
-    ]);
+    expect(result.coverage.some((item) => item.status === "not_verifiable")).toBeTrue();
+    expect(result.slices.map((slice) => slice.status)).toEqual(["completed", "incomplete"]);
     expect(result.stagesIncomplete).toContain("code_exploration:slice-2");
     expect(result.pendingDecisions.join(" ")).toContain("Zero findings does not mean zero defects");
     expect(
@@ -805,7 +900,7 @@ describe("structured-output resilience regression", () => {
     const usage = budget();
     const client = new RegressionClient(usage, "slice-1", "max_tokens");
     const result = await runReviewPipeline({
-      context: context(snapshot(["src/discount.ts", "src/other.ts"])),
+      context: context(snapshot(["src/discount.ts", "src/discount/other.ts"])),
       client,
       budget: usage,
       signal: new AbortController().signal,
@@ -836,7 +931,14 @@ describe("structured-output resilience regression", () => {
     const usage = budget();
     const client = new RegressionClient(usage, "slice-1", "permanent_api", "slice-2");
     const result = await runReviewPipeline({
-      context: context(snapshot(["src/discount.ts", "tests/discount.test.ts", "docs/discount.md"])),
+      context: context(
+        snapshot([
+          "src/discount.ts",
+          "tests/discount.test.ts",
+          "docs/discount.md",
+          "config/flag.ts",
+        ]),
+      ),
       client,
       budget: usage,
       signal: new AbortController().signal,

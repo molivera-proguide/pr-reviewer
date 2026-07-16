@@ -31,6 +31,17 @@ Claude Code ──JSON-RPC/stdin+stdout──> MCP tools
 
 The domain never imports MCP, Anthropic, or provider CLI response types. The application composes those adapters at the outer boundary.
 
+## Internal review stages
+
+`src/review/pipeline.ts` is the bounded coordinator rather than the owner of every review policy.
+Agent output projection, slice execution, finding identity, deterministic coverage, coverage repair,
+and semantic verification live in dedicated modules. Each stage returns domain data plus safe
+diagnostics; model output never bypasses evidence validation or the deterministic final projection.
+
+`src/application/reviewer-service.ts` remains the application facade. Report construction and MCP
+result summarization are pure modules, while provider, agent-client, clock, ID, and pipeline
+dependencies have production defaults and may be replaced in tests without changing runtime setup.
+
 ## Model routing
 
 The deterministic TypeScript pipeline remains the control plane. It schedules all stages, enforces
@@ -41,8 +52,9 @@ explicitly bounded effort. Test gaps do not enter that expensive semantic call b
 severity and verdict effect are deterministic.
 
 Implementation and test coverage are aggregated separately and verified deterministically before
-the final projection. Code slices never mix production and test files, every explorer receives a bounded
-global changed-file inventory, and SDD artifacts are excluded from code exploration. A verified
+the final projection. Implementation slices carry primary implementation files and related tests as
+secondary evidence in one code-first request. Every explorer receives a bounded global changed-file
+inventory, and SDD artifacts are excluded from code exploration. A verified
 implementation or test-coverage finding overrides optimistic coverage for the affected criterion.
 Stable finding IDs and evidence-based deduplication keep the cross-slice projection consistent. The
 Sonnet verifier receives only compact evidence for findings that can block or may be contractually
@@ -80,11 +92,16 @@ criterion-keyed outcome: `covered` with evidence or `defect` with evidence and f
 Accepted repair outcomes supersede earlier `not_verifiable` or unsupported partial candidates only
 for the explicitly requested criteria; verified defects remain authoritative.
 
-Test slices use a separate compact structured-output contract with exactly one assessment per
-assigned criterion. `partial` and `missing` carry their finding claim, action, confidence, and exact
-test evidence in the same object, eliminating cross-array mismatches without another model call.
-Equivalent duplicate outcomes are consolidated locally; missing, conflicting, or invalid-evidence
-assessments make only that slice incomplete with a bounded safe reason.
+The normal structured-output contract is criterion-keyed: every assigned criterion contains one
+mandatory implementation `covered` or `defect` outcome and one optional test observation. Test-gap
+claim, action, and confidence are optional and receive conservative local defaults, eliminating
+schema retries for metadata that does not affect acceptance or safety. Missing, contradictory, or
+invalid functional assessments remain unassessed and are eligible for the single directed repair.
+
+When no implementation files changed, explicit `test_only` slices use the compact test-only prompt
+and contract. They review assertions, false positives, intent, and boundaries without projecting
+implementation coverage. The persisted report scope keeps implementation outside the completeness
+calculation while still showing it as outside the change.
 
 ## Structured-output resilience
 

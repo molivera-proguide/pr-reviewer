@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { attemptSummarySchema, codeSliceSummarySchema, usageSchema } from "./agent-contracts.ts";
+
+export * from "./agent-contracts.ts";
 
 export const providerKindSchema = z.enum(["github", "gitlab"]);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
@@ -137,6 +140,8 @@ export type Finding = z.infer<typeof findingSchema>;
 export const coverageStatusSchema = z.enum(["covered", "partial", "missing", "not_verifiable"]);
 export const coverageDimensionSchema = z.enum(["implementation", "tests"]);
 export type CoverageDimension = z.infer<typeof coverageDimensionSchema>;
+export const reviewScopeSchema = z.enum(["implementation", "test_only"]);
+export type ReviewScope = z.infer<typeof reviewScopeSchema>;
 
 export const reviewCoverageSchema = z.object({
   criterionId: z.string(),
@@ -163,82 +168,8 @@ export const verdictSchema = z.enum([
 ]);
 export type Verdict = z.infer<typeof verdictSchema>;
 
-export const usageSchema = z.object({
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  calls: z.number().int().nonnegative(),
-  baseInputTokens: z.number().int().nonnegative().optional(),
-  cacheCreationInputTokens: z.number().int().nonnegative().optional(),
-  cacheReadInputTokens: z.number().int().nonnegative().optional(),
-  thinkingTokens: z.number().int().nonnegative().optional(),
-});
-export type Usage = z.infer<typeof usageSchema>;
-
-export const agentRoleSchema = z.enum([
-  "sdd_explorer",
-  "code_explorer",
-  "semantic_verifier",
-  "synthesizer",
-]);
-export type AgentRole = z.infer<typeof agentRoleSchema>;
-
-export const agentFailureKindSchema = z.enum([
-  "max_tokens",
-  "refusal",
-  "schema_validation",
-  "transient_api",
-  "permanent_api",
-  "budget",
-  "cancelled",
-]);
-export type AgentFailureKind = z.infer<typeof agentFailureKindSchema>;
-
-const safeDiagnosticIdentifierSchema = z
-  .string()
-  .max(256)
-  .regex(/^[A-Za-z0-9_.$:\\/-]+$/);
-const safeRequestIdSchema = z
-  .string()
-  .max(256)
-  .regex(/^req[_-][A-Za-z0-9_.:-]+$/);
-
-export const attemptSummarySchema = z.object({
-  role: agentRoleSchema,
-  model: safeDiagnosticIdentifierSchema.optional(),
-  sliceId: safeDiagnosticIdentifierSchema.optional(),
-  attempt: z.number().int().min(1).max(2),
-  status: z.enum(["completed", "failed"]),
-  failureKind: agentFailureKindSchema.optional(),
-  stopReason: z
-    .enum(["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"])
-    .nullable(),
-  requestId: safeRequestIdSchema.nullable(),
-  statusCode: z.number().int().min(100).max(599).nullable(),
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  baseInputTokens: z.number().int().nonnegative().optional(),
-  cacheCreationInputTokens: z.number().int().nonnegative().optional(),
-  cacheReadInputTokens: z.number().int().nonnegative().optional(),
-  thinkingTokens: z.number().int().nonnegative().optional(),
-  payloadBytes: z.number().int().nonnegative(),
-  validationPaths: z.array(safeDiagnosticIdentifierSchema).max(50),
-});
-export type AttemptSummary = z.infer<typeof attemptSummarySchema>;
-
-export const codeSliceSummarySchema = z.object({
-  id: safeDiagnosticIdentifierSchema,
-  kind: coverageDimensionSchema.optional(),
-  status: z.enum(["completed", "incomplete"]),
-  failureKind: agentFailureKindSchema.optional(),
-  attempts: z.number().int().nonnegative(),
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  requestIds: z.array(safeRequestIdSchema).max(2),
-});
-export type CodeSliceSummary = z.infer<typeof codeSliceSummarySchema>;
-
 export const reviewReportSchema = z.object({
-  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3", "1.4"]),
+  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]),
   reviewerVersion: z.string().min(1).optional(),
   reviewId: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),
@@ -260,6 +191,7 @@ export const reviewReportSchema = z.object({
   headSha: z.string(),
   feature: featureReferenceSchema.nullable(),
   artifacts: z.array(artifactSchema),
+  reviewScope: reviewScopeSchema.default("implementation"),
   coverage: z.array(reviewCoverageSchema),
   testCoverage: z.array(reviewCoverageSchema).default([]),
   findings: z.array(findingSchema),

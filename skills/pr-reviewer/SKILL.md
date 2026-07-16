@@ -26,6 +26,8 @@ Use only the tools exposed by the `pr-reviewer` MCP server for this workflow. Ke
 ## Coverage interpretation
 
 - Treat `coverage_summary` as implementation behavior and `test_coverage_summary` as static test evidence. Never merge their counts.
+- Use `review_scope` to distinguish a normal implementation review from a `test_only` PR. In a test-only review, implementation is outside the change rather than failed or missing.
+- In normal reviews, explain that modified tests are secondary evidence reviewed with the related implementation, not an independent approval gate.
 - Describe `missing` implementation coverage as required behavior shown absent by verified evidence.
 - Describe `partial` test coverage as some relevant assertions being visible without proof that every obligation is tested. Do not promote it to covered.
 - Describe `not_verifiable` as insufficient reliable evidence, not as covered or missing.

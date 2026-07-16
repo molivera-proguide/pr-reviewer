@@ -1,11 +1,15 @@
-import type { ChangedFile, CoverageDimension } from "../domain/contracts.ts";
+import type { ChangedFile, CoverageDimension, ReviewScope } from "../domain/contracts.ts";
 import type { SddCriterion } from "./agents/schemas.ts";
+
+export type ReviewSliceScope = ReviewScope;
+export type ReviewChangeKind = "implementation_with_tests" | "implementation_only" | "test_only";
 
 export interface ReviewSlice {
   readonly id: string;
-  readonly kind: CoverageDimension;
+  readonly scope: ReviewSliceScope;
   readonly criteria: readonly SddCriterion[];
-  readonly files: readonly ChangedFile[];
+  readonly implementationFiles: readonly ChangedFile[];
+  readonly testFiles: readonly ChangedFile[];
   readonly truncated: boolean;
 }
 
@@ -16,10 +20,58 @@ export function sliceKindOf(path: string): CoverageDimension {
     : "implementation";
 }
 
+export function classifyReviewChange(files: readonly ChangedFile[]): ReviewChangeKind {
+  const hasImplementation = files.some((file) => sliceKindOf(file.path) === "implementation");
+  const hasTests = files.some((file) => sliceKindOf(file.path) === "tests");
+  if (!hasImplementation && !hasTests) return "implementation_only";
+  if (!hasImplementation) return "test_only";
+  return hasTests ? "implementation_with_tests" : "implementation_only";
+}
+
+const conventionalRoots = new Set([
+  "app",
+  "apps",
+  "lib",
+  "libs",
+  "package",
+  "packages",
+  "src",
+  "test",
+  "tests",
+  "__tests__",
+]);
+
+function normalizedSegments(path: string): string[] {
+  return path.replaceAll("\\", "/").toLowerCase().split("/").filter(Boolean);
+}
+
+function stemOf(path: string): string {
+  const filename = normalizedSegments(path).at(-1) ?? "root";
+  return filename.replace(/\.(?:test|spec)(?=\.)/, "").replace(/\.[^.]+$/, "");
+}
+
 function domainOf(path: string): string {
-  const normalized = path.replaceAll("\\", "/");
-  const segments = normalized.split("/");
-  return segments.length > 1 ? (segments[0] ?? "root") : "root";
+  const segments = normalizedSegments(path);
+  const directories = segments.slice(0, -1).filter((segment) => !conventionalRoots.has(segment));
+  return directories[0] ?? stemOf(path);
+}
+
+function relationshipScore(
+  testFile: ChangedFile,
+  implementationFiles: readonly ChangedFile[],
+): number {
+  const testStem = stemOf(testFile.path);
+  const testDomain = domainOf(testFile.path);
+  const testTokens = new Set(normalizedSegments(testFile.path));
+  return implementationFiles.reduce((best, implementationFile) => {
+    const implementationTokens = normalizedSegments(implementationFile.path);
+    const sharedTokens = implementationTokens.filter((token) => testTokens.has(token)).length;
+    const score =
+      (stemOf(implementationFile.path) === testStem ? 20 : 0) +
+      (domainOf(implementationFile.path) === testDomain ? 10 : 0) +
+      sharedTokens;
+    return Math.max(best, score);
+  }, 0);
 }
 
 function fileChars(file: ChangedFile): number {
@@ -31,79 +83,168 @@ function fileChars(file: ChangedFile): number {
   );
 }
 
+interface SliceBucket {
+  scope: ReviewSliceScope;
+  implementationFiles: ChangedFile[];
+  testFiles: ChangedFile[];
+  chars: number;
+  truncated: boolean;
+  criteria: SddCriterion[];
+}
+
+function truncateFile(file: ChangedFile, remaining: number): ChangedFile {
+  const available = Math.max(0, remaining - file.path.length);
+  const perField = Math.floor(available / 3);
+  return {
+    ...file,
+    patch: file.patch?.slice(0, perField) ?? null,
+    headContent: file.headContent?.slice(0, perField) ?? null,
+    baseContent: file.baseContent?.slice(0, perField) ?? null,
+    truncated: true,
+  };
+}
+
+function appendWithinBudget(
+  bucket: SliceBucket,
+  file: ChangedFile,
+  target: "implementationFiles" | "testFiles",
+  maxCharsPerSlice: number,
+): void {
+  const chars = fileChars(file);
+  if (bucket.chars + chars <= maxCharsPerSlice) {
+    bucket[target].push(file);
+    bucket.chars += chars;
+    return;
+  }
+  bucket[target].push(truncateFile(file, maxCharsPerSlice - bucket.chars));
+  bucket.chars = maxCharsPerSlice;
+  bucket.truncated = true;
+}
+
+function mergeSmallestGroups(groups: ChangedFile[][], maxSlices: number): ChangedFile[][] {
+  const output = groups.map((group) => [...group]);
+  while (output.length > Math.max(1, maxSlices)) {
+    output.sort(
+      (left, right) =>
+        left.reduce((sum, file) => sum + fileChars(file), 0) -
+          right.reduce((sum, file) => sum + fileChars(file), 0) ||
+        (left[0]?.path ?? "").localeCompare(right[0]?.path ?? ""),
+    );
+    const smallest = output.shift();
+    if (smallest === undefined) break;
+    const target = output.reduce((best, current) => {
+      const bestScore = smallest.reduce(
+        (score, file) => Math.max(score, relationshipScore(file, best)),
+        0,
+      );
+      const currentScore = smallest.reduce(
+        (score, file) => Math.max(score, relationshipScore(file, current)),
+        0,
+      );
+      if (currentScore !== bestScore) return currentScore > bestScore ? current : best;
+      const bestSize = best.reduce((sum, file) => sum + fileChars(file), 0);
+      const currentSize = current.reduce((sum, file) => sum + fileChars(file), 0);
+      return currentSize < bestSize ? current : best;
+    });
+    target.push(...smallest);
+  }
+  return output;
+}
+
+function groupedByDomain(files: readonly ChangedFile[], maxSlices: number): ChangedFile[][] {
+  const grouped = new Map<string, ChangedFile[]>();
+  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+    const domain = domainOf(file.path);
+    const group = grouped.get(domain) ?? [];
+    group.push(file);
+    grouped.set(domain, group);
+  }
+  return mergeSmallestGroups([...grouped.values()], maxSlices).sort(
+    (left, right) =>
+      right.reduce((sum, file) => sum + fileChars(file), 0) -
+        left.reduce((sum, file) => sum + fileChars(file), 0) ||
+      (left[0]?.path ?? "").localeCompare(right[0]?.path ?? ""),
+  );
+}
+
+function criterionScore(criterion: SddCriterion, bucket: SliceBucket): number {
+  const tokens = (criterion.description.toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter(
+    (token) => token.length >= 4,
+  );
+  const paths = [...bucket.implementationFiles, ...bucket.testFiles].map((file) =>
+    file.path.toLowerCase(),
+  );
+  return tokens.reduce(
+    (score, token) => score + (paths.some((path) => path.includes(token)) ? 1 : 0),
+    0,
+  );
+}
+
 export function createReviewSlices(
   files: readonly ChangedFile[],
   criteria: readonly SddCriterion[],
   maxSlices = 3,
   maxCharsPerSlice = 600_000,
 ): ReviewSlice[] {
-  const grouped = new Map<string, { kind: CoverageDimension; files: ChangedFile[] }>();
-  for (const file of files) {
-    const kind = sliceKindOf(file.path);
-    const key = `${kind}:${domainOf(file.path)}`;
-    const group = grouped.get(key) ?? { kind, files: [] };
-    group.files.push(file);
-    grouped.set(key, group);
-  }
-  const groups = [...grouped.values()];
-  const kinds = [...new Set(groups.map((group) => group.kind))];
-  const targetCount = Math.min(maxSlices, groups.length);
-  const allocations = new Map(kinds.map((kind) => [kind, 1]));
-  while ([...allocations.values()].reduce((sum, value) => sum + value, 0) < targetCount) {
-    const kind = kinds.reduce((largest, current) => {
-      const load = groups
-        .filter((group) => group.kind === current)
-        .reduce((sum, group) => sum + group.files.reduce((n, file) => n + fileChars(file), 0), 0);
-      const largestLoad = groups
-        .filter((group) => group.kind === largest)
-        .reduce((sum, group) => sum + group.files.reduce((n, file) => n + fileChars(file), 0), 0);
-      return load / (allocations.get(current) ?? 1) > largestLoad / (allocations.get(largest) ?? 1)
-        ? current
-        : largest;
-    });
-    allocations.set(kind, (allocations.get(kind) ?? 0) + 1);
-  }
-  const buckets = kinds.flatMap((kind) =>
-    Array.from({ length: allocations.get(kind) ?? 1 }, () => ({
-      kind,
-      files: [] as ChangedFile[],
-      chars: 0,
-      truncated: false,
-    })),
+  if (files.length === 0) return [];
+  const implementationFiles = files.filter((file) => sliceKindOf(file.path) === "implementation");
+  const testFiles = files.filter((file) => sliceKindOf(file.path) === "tests");
+  const scope: ReviewSliceScope = implementationFiles.length === 0 ? "test_only" : "implementation";
+  const primaryGroups = groupedByDomain(
+    scope === "implementation" ? implementationFiles : testFiles,
+    maxSlices,
   );
-  const orderedGroups = groups.sort(
-    (left, right) =>
-      right.files.reduce((sum, file) => sum + fileChars(file), 0) -
-      left.files.reduce((sum, file) => sum + fileChars(file), 0),
-  );
-  for (const group of orderedGroups) {
-    const eligible = buckets.filter((bucket) => bucket.kind === group.kind);
-    const bucket = eligible.reduce((smallest, current) =>
-      current.chars < smallest.chars ? current : smallest,
-    );
-    for (const file of group.files) {
-      const chars = fileChars(file);
-      if (bucket.chars + chars > maxCharsPerSlice) {
-        const remaining = Math.max(0, maxCharsPerSlice - bucket.chars);
-        const patch = file.patch?.slice(0, Math.floor(remaining / 3)) ?? null;
-        const headContent = file.headContent?.slice(0, Math.floor(remaining / 3)) ?? null;
-        const baseContent = file.baseContent?.slice(0, Math.floor(remaining / 3)) ?? null;
-        bucket.files.push({ ...file, patch, headContent, baseContent, truncated: true });
-        bucket.chars = maxCharsPerSlice;
-        bucket.truncated = true;
-      } else {
-        bucket.files.push(file);
-        bucket.chars += chars;
-      }
+  const buckets: SliceBucket[] = primaryGroups.map(() => ({
+    scope,
+    implementationFiles: [],
+    testFiles: [],
+    chars: 0,
+    truncated: false,
+    criteria: [],
+  }));
+  for (const [index, group] of primaryGroups.entries()) {
+    const bucket = buckets[index];
+    if (bucket === undefined) continue;
+    for (const file of group) {
+      appendWithinBudget(
+        bucket,
+        file,
+        scope === "implementation" ? "implementationFiles" : "testFiles",
+        maxCharsPerSlice,
+      );
     }
   }
-  return buckets
-    .filter((bucket) => bucket.files.length > 0)
-    .map((bucket, index) => ({
-      id: `slice-${index + 1}`,
-      kind: bucket.kind,
-      criteria,
-      files: bucket.files,
-      truncated: bucket.truncated,
-    }));
+  if (scope === "implementation") {
+    for (const testFile of [...testFiles].sort((left, right) =>
+      left.path.localeCompare(right.path),
+    )) {
+      const bucket = buckets.reduce((best, current) => {
+        const bestScore = relationshipScore(testFile, best.implementationFiles);
+        const currentScore = relationshipScore(testFile, current.implementationFiles);
+        if (currentScore !== bestScore) return currentScore > bestScore ? current : best;
+        return current.chars < best.chars ? current : best;
+      });
+      appendWithinBudget(bucket, testFile, "testFiles", maxCharsPerSlice);
+    }
+  }
+  for (const criterion of criteria) {
+    const bucket = buckets.reduce((best, current) => {
+      const bestScore = criterionScore(criterion, best);
+      const currentScore = criterionScore(criterion, current);
+      if (currentScore !== bestScore) return currentScore > bestScore ? current : best;
+      if (current.criteria.length !== best.criteria.length) {
+        return current.criteria.length < best.criteria.length ? current : best;
+      }
+      return current.chars < best.chars ? current : best;
+    });
+    bucket.criteria.push(criterion);
+  }
+  return buckets.map((bucket, index) => ({
+    id: `slice-${index + 1}`,
+    scope: bucket.scope,
+    criteria: bucket.criteria,
+    implementationFiles: bucket.implementationFiles,
+    testFiles: bucket.testFiles,
+    truncated: bucket.truncated,
+  }));
 }

@@ -104,6 +104,8 @@ function verdictClass(verdict: ReviewReport["verdict"]): string {
 }
 
 export function renderReportHtml(report: ReviewReport): string {
+  const reviewScope = report.reviewScope ?? "implementation";
+  const scopeLabel = reviewScope === "test_only" ? "PR test-only" : "Revisión de implementación";
   const feature = report.feature?.directory ?? "No resuelta";
   const artifactsLoaded = report.artifacts.filter(
     (artifact) => artifact.status === "loaded",
@@ -198,7 +200,7 @@ export function renderReportHtml(report: ReviewReport): string {
     <div class="stamp stamp--${verdictClass(report.verdict)}">${escapeHtml(report.verdict.replaceAll("_", " "))}</div>
   </header>
   <div class="metrics" aria-label="Resumen de revisión">
-    <div class="metric"><span>Estado</span><strong>${escapeHtml(report.status)}</strong><small>${escapeHtml(report.provider)} · ${escapeHtml(report.host)}</small></div>
+    <div class="metric"><span>Estado</span><strong>${escapeHtml(report.status)}</strong><small>${escapeHtml(scopeLabel)} · ${escapeHtml(report.provider)} · ${escapeHtml(report.host)}</small></div>
     <div class="metric"><span>Hallazgos</span><strong>${report.findings.length}</strong><small>${critical} críticos · ${high} altos</small></div>
     <div class="metric"><span>Cobertura</span><strong>${report.coverage.length}</strong><small>implementación · ${report.testCoverage.length} en pruebas</small></div>
     <div class="metric"><span>Artefactos</span><strong>${artifactsLoaded}/${report.artifacts.length}</strong><small>cargados / inventariados</small></div>
@@ -210,6 +212,7 @@ export function renderReportHtml(report: ReviewReport): string {
   <section><div class="section-head"><b>00</b><h2>Trazabilidad</h2></div>
     <dl class="meta">
       <div><dt>Feature</dt><dd>${escapeHtml(feature)}</dd></div><div><dt>Modelos explorador / orquestador</dt><dd>${escapeHtml(modelSummary)}</dd></div>
+      <div><dt>Alcance</dt><dd>${escapeHtml(scopeLabel)}</dd></div>
       <div><dt>Cache leído</dt><dd>${cacheReadTokens} tokens</dd></div><div><dt>Thinking</dt><dd>${thinkingTokens} tokens</dd></div>
       <div><dt>HEAD SHA</dt><dd><code>${escapeHtml(report.headSha)}</code></dd></div><div><dt>Base SHA</dt><dd><code>${escapeHtml(report.baseSha)}</code></dd></div>
       <div><dt>Review ID</dt><dd><code>${escapeHtml(report.reviewId)}</code></dd></div><div><dt>Generado</dt><dd>${escapeHtml(report.createdAt)}</dd></div>
@@ -217,11 +220,11 @@ export function renderReportHtml(report: ReviewReport): string {
     </dl>
   </section>
 
-  <section><div class="section-head"><b>01</b><h2>Cobertura de implementación</h2></div>
+  <section><div class="section-head"><b>01</b><h2>${reviewScope === "test_only" ? "Implementación fuera de alcance" : "Cobertura de implementación"}</h2></div>
     <table><thead><tr><th>Criterio</th><th>Descripción</th><th>Estado</th><th>Evidencia / nota</th></tr></thead><tbody>${report.coverage.map(renderCoverageRow).join("")}</tbody></table>
   </section>
 
-  <section><div class="section-head"><b>02</b><h2>Cobertura de pruebas</h2></div>
+  <section><div class="section-head"><b>02</b><h2>${reviewScope === "test_only" ? "Revisión de tests" : "Cobertura de pruebas · evidencia secundaria"}</h2></div>
     <table><thead><tr><th>Criterio</th><th>Descripción</th><th>Estado</th><th>Evidencia / nota</th></tr></thead><tbody>${report.testCoverage.map(renderCoverageRow).join("")}</tbody></table>
   </section>
 

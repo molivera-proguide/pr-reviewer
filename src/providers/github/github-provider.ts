@@ -12,10 +12,12 @@ import { ReviewerError } from "../../domain/errors.ts";
 import type { CommandExecutor } from "../../security/command-runner.ts";
 import type { ProviderLimits, RepositoryProvider } from "../provider.ts";
 import {
+  assertTextWithinByteLimit,
   bytesToSnapshotContent,
   encodeRepositoryPath,
   joinFileDiffs,
   parseJson,
+  readOptionalSnapshotFile,
 } from "../provider-utils.ts";
 
 const listItemSchema = z.object({
@@ -194,11 +196,15 @@ export class GitHubProvider implements RepositoryProvider {
       const headFile =
         status === "deleted"
           ? null
-          : await this.tryReadTextFile(pull.head.sha, raw.filename, signal);
+          : await readOptionalSnapshotFile(() =>
+              this.readTextFile(pull.head.sha, raw.filename, signal),
+            );
       const oldPath = raw.previous_filename ?? (status === "renamed" ? null : raw.filename);
       const baseFile =
         status === "deleted" || status === "renamed"
-          ? await this.tryReadTextFile(pull.base.sha, oldPath ?? raw.filename, signal)
+          ? await readOptionalSnapshotFile(() =>
+              this.readTextFile(pull.base.sha, oldPath ?? raw.filename, signal),
+            )
           : null;
       files.push({
         oldPath,
@@ -214,12 +220,11 @@ export class GitHubProvider implements RepositoryProvider {
       });
     }
     const diff = joinFileDiffs(files);
-    if (Buffer.byteLength(diff, "utf8") > this.limits.maxDiffBytes) {
-      throw new ReviewerError(
-        "CONTENT_LIMIT_EXCEEDED",
-        "Pull request diff exceeds the byte limit.",
-      );
-    }
+    assertTextWithinByteLimit(
+      diff,
+      this.limits.maxDiffBytes,
+      "Pull request diff exceeds the byte limit.",
+    );
     return {
       number: pull.number,
       title: pull.title,
@@ -304,21 +309,6 @@ export class GitHubProvider implements RepositoryProvider {
     const decoded = Buffer.from(content.content.replace(/\s/g, ""), "base64");
     const normalized = bytesToSnapshotContent(decoded, this.limits.maxFileBytes);
     return { path, revision, ...normalized, sha: content.sha };
-  }
-
-  private async tryReadTextFile(
-    revision: string,
-    path: string,
-    signal: AbortSignal,
-  ): Promise<SnapshotFile | null> {
-    try {
-      return await this.readTextFile(revision, path, signal);
-    } catch (error) {
-      if (error instanceof ReviewerError && error.code === "COMMAND_FAILED") {
-        return null;
-      }
-      throw error;
-    }
   }
 
   private async readPullFiles(

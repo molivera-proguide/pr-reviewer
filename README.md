@@ -6,10 +6,11 @@ Structured agent failures are isolated per code slice. Completed slices and SDD 
 the report, while truncation, refusal, schema, API, or budget failures are represented only by safe
 diagnostic metadata and force an incomplete, non-green result.
 
-Implementation coverage and test coverage are computed and reported separately. Verified
-implementation findings deterministically mark their affected SDD criteria as missing, even when
-an exploratory coverage row claimed otherwise. SDD artifacts are analyzed only by the SDD role and
-are excluded from code slices.
+The default flow is code-first: related modified tests travel in the same domain slice as primary
+implementation files and act only as secondary evidence. Implementation coverage and test coverage
+are computed and reported separately. Verified implementation findings deterministically mark
+their affected SDD criteria as missing, while test gaps never downgrade functional coverage. SDD
+artifacts are analyzed only by the SDD role and are excluded from code slices.
 
 Contractual findings are criterion-specific: one finding can reference at most one SDD criterion.
 Test-coverage findings are capped at `medium`, maintainability findings at `low`, and only verified
@@ -18,15 +19,20 @@ criteria, the pipeline may issue one bounded, implementation-only coverage repai
 deterministic final projection.
 Contractual finding IDs are derived from immutable revision, impact, and criterion rather than
 model wording. Test findings distinguish partial assertions from complete absence of assertions.
+Normal code-first responses bind one required implementation outcome and one optional test
+observation to each assigned criterion, avoiding contradictory parallel arrays.
 Assertion-bearing evidence deterministically prevents a confirmed test gap from being classified
 as completely missing. Ambiguous or conflicting implementation coverage is never promoted to
 covered; it is repaired once through a criterion-keyed `covered`/`defect` contract.
-Only blocking implementation candidates and ambiguous contractual maintainability claims reach
-the Sonnet semantic verifier. Risks and SDD-conflict decisions are projected locally, removing the
-final model synthesis call; a normal review with repair therefore uses at most five calls.
-Test slices use a compact criterion-keyed contract that binds `covered`, `partial`, `missing`, or
-`not_verifiable` to its evidence and, for gaps, its finding metadata. An accepted repair supersedes
-only earlier ambiguous assessments for the criteria it explicitly repaired.
+Only critical/high implementation candidates reach the Sonnet semantic verifier. Risks and
+SDD-conflict decisions are projected locally, removing the final model synthesis call. A small
+normal review therefore uses two exploration calls plus an optional implementation repair and an
+optional semantic verification call.
+
+When a PR changes tests only, the report records `reviewScope: test_only`. That two-call flow reviews
+assertions, intent, false positives, and scenario coverage without inferring implementation
+correctness or creating artificial functional incompleteness. Test-gap claim, confidence, and
+suggested action are derived locally when omitted, so optional metadata cannot trigger a retry.
 
 Partial implementation coverage requires a matching verified defect or an objectively
 incomplete/conflicting slice; test coverage remains partial unless its complete assertions are

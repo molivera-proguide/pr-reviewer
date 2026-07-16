@@ -3,7 +3,7 @@ import type { ChangeRequestSnapshot, Finding, ReviewCoverage } from "../../src/d
 import {
   codeAnalysisSchema,
   semanticVerificationSchema,
-  testAnalysisSchema,
+  testOnlyAnalysisSchema,
 } from "../../src/review/agents/schemas.ts";
 import {
   applySeverityCap,
@@ -75,14 +75,30 @@ const criteria = [
 ];
 
 describe("semantic stability policies", () => {
-  test("rejects findings and semantic decisions associated with two criteria", () => {
+  test("uses criterion-keyed implementation findings and rejects multi-criterion semantic decisions", () => {
     expect(
       codeAnalysisSchema.safeParse({
-        findings: [{ ...agentFinding, criterionIds: ["AC-001", "AC-002"] }],
-        coverage: [],
+        reviews: [
+          {
+            criterionId: "AC-001",
+            implementation: {
+              status: "defect",
+              finding: {
+                id: agentFinding.id,
+                severity: agentFinding.severity,
+                category: agentFinding.category,
+                claim: agentFinding.claim,
+                evidence: agentFinding.evidence,
+                confidence: agentFinding.confidence,
+                suggestedAction: agentFinding.suggestedAction,
+              },
+            },
+          },
+        ],
+        maintainabilityFindings: [],
         limitations: [],
       }).success,
-    ).toBeFalse();
+    ).toBeTrue();
     expect(
       semanticVerificationSchema.safeParse({
         decisions: [
@@ -102,9 +118,22 @@ describe("semantic stability policies", () => {
 
   test("accepts criterion-free maintainability and separate findings sharing evidence", () => {
     const parsed = codeAnalysisSchema.safeParse({
-      findings: [
-        { ...agentFinding, id: "F-AC-001", criterionIds: ["AC-001"] },
-        { ...agentFinding, id: "F-AC-002", criterionIds: ["AC-002"] },
+      reviews: ["AC-001", "AC-002"].map((criterionId) => ({
+        criterionId,
+        implementation: {
+          status: "defect",
+          finding: {
+            id: `F-${criterionId}`,
+            severity: agentFinding.severity,
+            category: agentFinding.category,
+            claim: agentFinding.claim,
+            evidence: agentFinding.evidence,
+            confidence: agentFinding.confidence,
+            suggestedAction: agentFinding.suggestedAction,
+          },
+        },
+      })),
+      maintainabilityFindings: [
         {
           ...agentFinding,
           id: "F-M",
@@ -114,7 +143,6 @@ describe("semantic stability policies", () => {
           criterionIds: [],
         },
       ],
-      coverage: [],
       limitations: [],
     });
     expect(parsed.success).toBeTrue();
@@ -140,53 +168,60 @@ describe("semantic stability policies", () => {
     );
   });
 
-  test("requires test findings to classify partial versus missing coverage", () => {
-    const testFinding = {
-      ...agentFinding,
-      impact: "test_coverage",
-      severity: "medium",
-    };
-    expect(
-      codeAnalysisSchema.safeParse({ findings: [testFinding], coverage: [], limitations: [] })
-        .success,
-    ).toBeFalse();
+  test("keeps test observations separate from implementation outcomes", () => {
     for (const testCoverageStatus of ["partial", "missing"] as const) {
       expect(
         codeAnalysisSchema.safeParse({
-          findings: [{ ...testFinding, testCoverageStatus }],
-          coverage: [],
+          reviews: [
+            {
+              criterionId: "AC-002",
+              implementation: {
+                status: "covered",
+                evidence: [evidence],
+                notes: "Implementation is complete.",
+              },
+              tests: {
+                status: testCoverageStatus,
+                evidence: [{ ...evidence, path: "tests/rates.test.ts" }],
+                notes: "Assertions are incomplete.",
+              },
+            },
+          ],
+          maintainabilityFindings: [],
           limitations: [],
         }).success,
       ).toBeTrue();
     }
   });
 
-  test("binds each test gap status to its finding metadata and evidence", () => {
+  test("accepts derivable test-gap metadata but keeps evidence mandatory", () => {
     const base = {
-      criterionId: "AC-002",
       evidence: [{ ...evidence, path: "tests/rates.test.ts" }],
       notes: "Silver is not asserted.",
     };
     expect(
-      testAnalysisSchema.safeParse({
-        assessments: [{ ...base, status: "missing" }],
-        limitations: [],
-      }).success,
-    ).toBeFalse();
-    expect(
-      testAnalysisSchema.safeParse({
-        assessments: [
-          {
-            ...base,
-            status: "missing",
-            claim: "Silver has no relevant assertion.",
-            confidence: 0.95,
-            suggestedAction: "Add a Silver assertion.",
-          },
-        ],
+      testOnlyAnalysisSchema.safeParse({
+        assessments: [{ criterionId: "AC-002", observation: { ...base, status: "missing" } }],
+        maintainabilityFindings: [],
         limitations: [],
       }).success,
     ).toBeTrue();
+    expect(
+      testOnlyAnalysisSchema.safeParse({
+        assessments: [
+          {
+            criterionId: "AC-002",
+            observation: {
+              status: "missing",
+              evidence: [],
+              notes: "Missing evidence.",
+            },
+          },
+        ],
+        maintainabilityFindings: [],
+        limitations: [],
+      }).success,
+    ).toBeFalse();
   });
 
   test("treats a confirmed test gap with assertion evidence as partial", () => {

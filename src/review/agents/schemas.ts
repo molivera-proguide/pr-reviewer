@@ -1,9 +1,7 @@
 import { z } from "zod";
 import {
-  coverageDimensionSchema,
   evidenceSchema,
   findingImpactSchema,
-  reviewCoverageSchema,
   severitySchema,
   testCoverageStatusSchema,
 } from "../../domain/contracts.ts";
@@ -11,12 +9,6 @@ import {
 const conciseText = z.string().min(1).max(1_000);
 const agentEvidenceSchema = evidenceSchema.extend({
   excerpt: z.string().max(1_200),
-});
-const agentCoverageSchema = reviewCoverageSchema.extend({
-  dimension: coverageDimensionSchema,
-  description: conciseText,
-  evidence: z.array(agentEvidenceSchema).max(3),
-  notes: z.string().max(1_000),
 });
 const agentLimitationSchema = z.object({
   scope: z.enum(["global_unavailability", "slice_isolation"]),
@@ -88,49 +80,91 @@ export const agentFindingSchema = z.discriminatedUnion("impact", [
 ]);
 export type AgentFinding = z.infer<typeof agentFindingSchema>;
 
+const implementationFindingSchema = z.object({
+  id: agentFindingFields.id,
+  severity: severitySchema,
+  category: agentFindingFields.category,
+  claim: agentFindingFields.claim,
+  evidence: agentFindingFields.evidence,
+  confidence: agentFindingFields.confidence,
+  suggestedAction: agentFindingFields.suggestedAction,
+});
+
+const maintainabilityFindingSchema = z.object({
+  ...agentFindingFields,
+  impact: z.literal("maintainability"),
+  severity: z.literal("low"),
+  criterionIds: z.array(z.string()).max(0),
+});
+
+const testObservationFields = {
+  evidence: z.array(agentEvidenceSchema).min(1).max(3),
+  notes: z.string().min(1).max(1_000),
+} as const;
+
+export const testObservationSchema = z.discriminatedUnion("status", [
+  z.object({ ...testObservationFields, status: z.literal("covered") }),
+  z.object({
+    ...testObservationFields,
+    status: z.literal("partial"),
+    claim: z.string().min(1).max(500).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    suggestedAction: z.string().min(1).max(600).optional(),
+  }),
+  z.object({
+    ...testObservationFields,
+    status: z.literal("missing"),
+    claim: z.string().min(1).max(500).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    suggestedAction: z.string().min(1).max(600).optional(),
+  }),
+  z.object({
+    status: z.literal("not_verifiable"),
+    notes: z.string().min(1).max(1_000),
+  }),
+]);
+export type TestObservation = z.infer<typeof testObservationSchema>;
+
+const criterionReviewSchema = z.object({
+  criterionId: z.string().min(1).max(100),
+  implementation: z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("covered"),
+      evidence: z.array(agentEvidenceSchema).min(1).max(3),
+      notes: z.string().min(1).max(1_000),
+    }),
+    z.object({
+      status: z.literal("defect"),
+      finding: implementationFindingSchema,
+    }),
+  ]),
+  tests: testObservationSchema.optional(),
+});
+
 export const codeAnalysisSchema = z.object({
-  findings: z.array(agentFindingSchema).max(12),
-  coverage: z
-    .array(agentCoverageSchema)
-    .max(50)
-    .describe("Only coverage directly supported by this slice; omit empty rows."),
+  reviews: z
+    .array(criterionReviewSchema)
+    .max(200)
+    .describe("Exactly one implementation-first review for every criterion assigned to the slice."),
+  maintainabilityFindings: z.array(maintainabilityFindingSchema).max(6),
   limitations: z.array(agentLimitationSchema).max(10),
 });
 export type CodeAnalysis = z.infer<typeof codeAnalysisSchema>;
 
-const testAssessmentFields = {
-  criterionId: z.string().min(1).max(100),
-  evidence: z.array(agentEvidenceSchema).min(1).max(3),
-  notes: z.string().min(1).max(1_000),
-} as const;
-const testGapFields = {
-  ...testAssessmentFields,
-  claim: z.string().min(1).max(500),
-  confidence: z.number().min(0).max(1),
-  suggestedAction: z.string().min(1).max(600),
-} as const;
-
-export const testAnalysisSchema = z.object({
+export const testOnlyAnalysisSchema = z.object({
   assessments: z
     .array(
-      z.discriminatedUnion("status", [
-        z.object({ ...testAssessmentFields, status: z.literal("covered") }),
-        z.object({ ...testGapFields, status: z.literal("partial") }),
-        z.object({ ...testGapFields, status: z.literal("missing") }),
-        z.object({
-          criterionId: z.string().min(1).max(100),
-          status: z.literal("not_verifiable"),
-          evidence: z.array(agentEvidenceSchema).max(3),
-          notes: z.string().min(1).max(1_000),
-        }),
-      ]),
+      z.object({
+        criterionId: z.string().min(1).max(100),
+        observation: testObservationSchema,
+      }),
     )
-    .min(1)
     .max(200)
-    .describe("Exactly one test assessment for every criterion assigned to the slice."),
+    .describe("Exactly one test-only assessment for every criterion assigned to the slice."),
+  maintainabilityFindings: z.array(maintainabilityFindingSchema).max(8),
   limitations: z.array(agentLimitationSchema).max(10),
 });
-export type TestAnalysis = z.infer<typeof testAnalysisSchema>;
+export type TestOnlyAnalysis = z.infer<typeof testOnlyAnalysisSchema>;
 
 const coverageRepairFields = {
   criterionId: z.string().min(1).max(100),
@@ -190,16 +224,3 @@ export const semanticVerificationSchema = z.object({
     .max(50),
 });
 export type SemanticVerification = z.infer<typeof semanticVerificationSchema>;
-
-export const synthesisSchema = z.object({
-  risks: z.array(conciseText).max(20),
-  pendingDecisions: z
-    .array(
-      z.object({
-        question: conciseText,
-        conflictIndexes: z.array(z.number().int().nonnegative()).min(1).max(10),
-      }),
-    )
-    .max(20),
-});
-export type Synthesis = z.infer<typeof synthesisSchema>;

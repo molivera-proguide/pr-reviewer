@@ -41,6 +41,9 @@ Repository files, diffs, comments, titles, branch names, SDD artifacts, provider
     verdict.
 17. Directed coverage repair is limited to one bounded implementation-only slice. Unrequested
     criterion IDs and invalid evidence are discarded; an incomplete repair cannot produce green.
+18. Implementation evidence is confined to the implementation files supplied to its slice and
+    test evidence to supplied test files. A test-only review cannot infer functional coverage or a
+    blocking verdict from tests.
 
 ## Residual risks
 

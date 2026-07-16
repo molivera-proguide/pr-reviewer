@@ -17,6 +17,7 @@ afterEach(async () => {
 
 const report: ReviewReport = {
   schemaVersion: "1.0",
+  reviewScope: "implementation",
   reviewId: "review-ttl",
   createdAt: "2026-07-13T00:00:00.000Z",
   expiresAt: "2026-07-14T00:00:00.000Z",

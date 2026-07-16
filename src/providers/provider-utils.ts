@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { SnapshotFile } from "../domain/contracts.ts";
 import { ReviewerError } from "../domain/errors.ts";
 
 export function parseJson<T>(text: string, schema: z.ZodType<T>, source: string): T {
@@ -52,4 +53,23 @@ export function joinFileDiffs(
       return `diff --git a/${oldPath} b/${file.path}\n--- a/${oldPath}\n+++ b/${file.path}\n${file.patch ?? "[diff unavailable]"}`;
     })
     .join("\n");
+}
+
+export async function readOptionalSnapshotFile(
+  read: () => Promise<SnapshotFile>,
+): Promise<SnapshotFile | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof ReviewerError && error.code === "COMMAND_FAILED") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function assertTextWithinByteLimit(value: string, maxBytes: number, message: string): void {
+  if (Buffer.byteLength(value, "utf8") > maxBytes) {
+    throw new ReviewerError("CONTENT_LIMIT_EXCEEDED", message);
+  }
 }

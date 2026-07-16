@@ -26,6 +26,7 @@ export function reviewStructuredContent(result: ReviewResult) {
     review_id: result.reviewId,
     status: result.status,
     verdict: result.verdict,
+    review_scope: result.reviewScope,
     provider: result.provider,
     repository: result.repository,
     root: result.root,

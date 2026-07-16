@@ -11,7 +11,13 @@ import type {
 import { ReviewerError } from "../../domain/errors.ts";
 import type { CommandExecutor } from "../../security/command-runner.ts";
 import type { ProviderLimits, RepositoryProvider } from "../provider.ts";
-import { bytesToSnapshotContent, joinFileDiffs, parseJson } from "../provider-utils.ts";
+import {
+  assertTextWithinByteLimit,
+  bytesToSnapshotContent,
+  joinFileDiffs,
+  parseJson,
+  readOptionalSnapshotFile,
+} from "../provider-utils.ts";
 
 const authorSchema = z.object({ username: z.string() });
 const listItemSchema = z.object({
@@ -155,10 +161,14 @@ export class GitLabProvider implements RepositoryProvider {
       const headFile =
         status === "deleted"
           ? null
-          : await this.tryReadTextFile(mergeRequest.diff_refs.head_sha, raw.new_path, signal);
+          : await readOptionalSnapshotFile(() =>
+              this.readTextFile(mergeRequest.diff_refs.head_sha, raw.new_path, signal),
+            );
       const baseFile =
         status === "deleted" || status === "renamed"
-          ? await this.tryReadTextFile(mergeRequest.diff_refs.base_sha, raw.old_path, signal)
+          ? await readOptionalSnapshotFile(() =>
+              this.readTextFile(mergeRequest.diff_refs.base_sha, raw.old_path, signal),
+            )
           : null;
       const patchUnavailable = raw.collapsed === true || raw.too_large === true;
       files.push({
@@ -175,12 +185,11 @@ export class GitLabProvider implements RepositoryProvider {
       });
     }
     const diff = joinFileDiffs(files);
-    if (Buffer.byteLength(diff, "utf8") > this.limits.maxDiffBytes) {
-      throw new ReviewerError(
-        "CONTENT_LIMIT_EXCEEDED",
-        "Merge request diff exceeds the byte limit.",
-      );
-    }
+    assertTextWithinByteLimit(
+      diff,
+      this.limits.maxDiffBytes,
+      "Merge request diff exceeds the byte limit.",
+    );
     return {
       number: mergeRequest.iid,
       title: mergeRequest.title,
@@ -249,21 +258,6 @@ export class GitLabProvider implements RepositoryProvider {
     const bytes = new TextEncoder().encode(result);
     const normalized = bytesToSnapshotContent(bytes, this.limits.maxFileBytes);
     return { path, revision, ...normalized };
-  }
-
-  private async tryReadTextFile(
-    revision: string,
-    path: string,
-    signal: AbortSignal,
-  ): Promise<SnapshotFile | null> {
-    try {
-      return await this.readTextFile(revision, path, signal);
-    } catch (error) {
-      if (error instanceof ReviewerError && error.code === "COMMAND_FAILED") {
-        return null;
-      }
-      throw error;
-    }
   }
 
   private async readDiffs(

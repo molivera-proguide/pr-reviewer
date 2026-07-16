@@ -238,14 +238,14 @@ describe("Anthropic agent client structured output", () => {
     expect(setup.budget.snapshot().outputTokens).toBe(5);
   });
 
-  test("routes synthesis to medium-effort Sonnet and does not retry max_tokens", async () => {
+  test("routes semantic verification to medium-effort Sonnet and does not retry max_tokens", async () => {
     const requests: Parameters<AgentMessageCreator>[0][] = [];
     const setup = client(async (params) => {
       requests.push(params);
       return message({ text: "", stopReason: "max_tokens", outputTokens: 1_000 });
     });
     const promise = setup.value.run({
-      role: "synthesizer",
+      role: "semantic_verifier",
       system: "system",
       payload: {},
       schema,
@@ -267,7 +267,7 @@ describe("Anthropic agent client structured output", () => {
     }, logger);
     try {
       await setup.value.run({
-        role: "synthesizer",
+        role: "semantic_verifier",
         system: "system",
         payload: {},
         schema,

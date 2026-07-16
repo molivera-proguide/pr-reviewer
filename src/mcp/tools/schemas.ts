@@ -65,6 +65,7 @@ export const reviewOutputShape = {
   review_id: z.string(),
   status: z.enum(["completed", "incomplete", "stale", "cancelled", "failed"]),
   verdict: z.enum(["RIESGO_BLOQUEANTE", "REQUIERE_DECISION", "SIN_HALLAZGOS_BLOQUEANTES"]),
+  review_scope: z.enum(["implementation", "test_only"]),
   provider: z.enum(["github", "gitlab"]),
   repository: z.string(),
   root: z.string(),
