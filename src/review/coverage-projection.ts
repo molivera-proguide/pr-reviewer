@@ -77,14 +77,23 @@ export function coverageFromCompletedSlices(
   });
 }
 
-export function globalAgentLimitations(results: readonly CodeSliceResult[]): string[] {
-  return results.flatMap((result) =>
-    result.analysis !== undefined
-      ? result.analysis.limitations
-          .filter((limitation) => limitation.scope === "global_unavailability")
-          .map((limitation) => limitation.description)
-      : [],
+export function globalAgentLimitations(
+  results: readonly CodeSliceResult[],
+  snapshot: ReviewContext["snapshot"],
+): string[] {
+  const agentReportedGlobalUnavailability = results.some((result) =>
+    result.analysis?.limitations.some((limitation) => limitation.scope === "global_unavailability"),
   );
+  if (!agentReportedGlobalUnavailability) return [];
+  const unavailableFiles = snapshot.files.filter(
+    (file) =>
+      file.binary || file.truncated || (file.headContent === null && file.baseContent === null),
+  );
+  return unavailableFiles.length === 0
+    ? []
+    : [
+        `Agent-reported global unavailability was confirmed for ${unavailableFiles.length} changed file(s).`,
+      ];
 }
 
 export function coverageFromFindings(

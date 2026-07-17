@@ -62,6 +62,30 @@ describe("review slicer", () => {
     expect(slices.every((slice) => slice.implementationFiles.length === 1)).toBeTrue();
   });
 
+  test("normalizes plural criterion terms in deterministic fallback assignments", () => {
+    const slices = createReviewSlices(
+      [changedFile("src/cart.ts"), changedFile("src/discount.ts")],
+      [
+        {
+          id: "AC-001",
+          description: "The cart keeps its total.",
+          required: true,
+          sourcePath: "docs/spec.md",
+        },
+        {
+          id: "AC-002",
+          description: "Configured discounts apply to silver customers.",
+          required: true,
+          sourcePath: "docs/spec.md",
+        },
+      ],
+    );
+    const discount = slices.find((slice) =>
+      slice.implementationFiles.some((file) => file.path === "src/discount.ts"),
+    );
+    expect(discount?.criteria.map((criterion) => criterion.id)).toContain("AC-002");
+  });
+
   test("produces explicit test-only slices without implementation files", () => {
     const slices = createReviewSlices(
       [changedFile("tests/auth/policy.test.ts"), changedFile("tests/auth/session.test.ts")],

@@ -258,6 +258,25 @@ describe("Anthropic agent client structured output", () => {
     expect(requests[0]?.output_config?.effort).toBe("medium");
   });
 
+  test("routes slice planning to the bounded Sonnet orchestrator", async () => {
+    const requests: Parameters<AgentMessageCreator>[0][] = [];
+    const setup = client(async (params) => {
+      requests.push(params);
+      return message({ text: JSON.stringify({ value: 1 }) });
+    });
+    await setup.value.run({
+      role: "slice_planner",
+      system: "system",
+      payload: {},
+      schema,
+      maxTokens: 1_000,
+      signal,
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.model).toBe("claude-sonnet-test");
+    expect(requests[0]?.output_config?.effort).toBe("medium");
+  });
+
   test("classifies an exhausted transient API failure without application retry", async () => {
     let calls = 0;
     const logger = new CapturingLogger();

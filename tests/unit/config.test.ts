@@ -8,6 +8,7 @@ describe("model routing configuration", () => {
     expect(config.orchestratorModel).toBe("claude-sonnet-5");
     expect(config.model).toBe(config.orchestratorModel);
     expect(config.orchestratorEffort).toBe("medium");
+    expect(config.maxAgentCalls).toBe(10);
   });
 
   test("keeps the legacy model variable as an override for every role", () => {

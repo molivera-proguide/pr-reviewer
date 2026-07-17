@@ -100,7 +100,7 @@ describe("HTML report", () => {
         },
       ],
     });
-    expect(html).toContain("0 hallazgos no equivale a 0 defectos");
+    expect(html).toContain("criterios o fragmentos del cambio no pudieron verificarse");
     expect(html).toContain("slice-2");
     expect(html).toContain("refusal");
     expect(html).toContain("req_safe123");

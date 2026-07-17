@@ -17,6 +17,8 @@ export type CodeSliceResult =
       readonly status: "completed";
       readonly sliceId: string;
       readonly sliceScope: ReviewSliceScope;
+      readonly assignedCriteria: number;
+      readonly assessmentStatus: "complete" | "gapped";
       readonly analysis: SliceAnalysis;
       readonly diagnostics: readonly AttemptSummary[];
     }
@@ -24,6 +26,7 @@ export type CodeSliceResult =
       readonly status: "incomplete";
       readonly sliceId: string;
       readonly sliceScope: ReviewSliceScope;
+      readonly assignedCriteria: number;
       readonly failureKind: AgentFailureKind;
       readonly limitation: string;
       readonly diagnostics: readonly AttemptSummary[];
@@ -73,23 +76,15 @@ export async function runCodeSlices(options: {
           slice,
           snapshot: options.context.snapshot,
         });
-        return converted.complete
-          ? {
-              status: "completed",
-              sliceId: slice.id,
-              sliceScope: slice.scope,
-              analysis: converted.analysis,
-              diagnostics: response.diagnostics,
-            }
-          : {
-              status: "incomplete",
-              sliceId: slice.id,
-              sliceScope: slice.scope,
-              failureKind: "schema_validation",
-              limitation: converted.limitation,
-              analysis: converted.analysis,
-              diagnostics: response.diagnostics,
-            };
+        return {
+          status: "completed",
+          sliceId: slice.id,
+          sliceScope: slice.scope,
+          assignedCriteria: slice.criteria.length,
+          assessmentStatus: converted.complete ? "complete" : "gapped",
+          analysis: converted.analysis,
+          diagnostics: response.diagnostics,
+        };
       }
       const response = await options.client.run({
         role: "code_explorer",
@@ -105,29 +100,22 @@ export async function runCodeSlices(options: {
         slice,
         snapshot: options.context.snapshot,
       });
-      return converted.complete
-        ? {
-            status: "completed",
-            sliceId: slice.id,
-            sliceScope: slice.scope,
-            analysis: converted.analysis,
-            diagnostics: response.diagnostics,
-          }
-        : {
-            status: "incomplete",
-            sliceId: slice.id,
-            sliceScope: slice.scope,
-            failureKind: "schema_validation",
-            limitation: converted.limitation,
-            analysis: converted.analysis,
-            diagnostics: response.diagnostics,
-          };
+      return {
+        status: "completed",
+        sliceId: slice.id,
+        sliceScope: slice.scope,
+        assignedCriteria: slice.criteria.length,
+        assessmentStatus: converted.complete ? "complete" : "gapped",
+        analysis: converted.analysis,
+        diagnostics: response.diagnostics,
+      };
     } catch (error) {
       const failure = classifyAgentFailure(error);
       return {
         status: "incomplete",
         sliceId: slice.id,
         sliceScope: slice.scope,
+        assignedCriteria: slice.criteria.length,
         failureKind: failure.kind,
         limitation: safeStageLimitation("Code exploration", failure.kind, slice.id),
         diagnostics: failure.diagnostics,
@@ -201,6 +189,7 @@ export async function runCodeSlices(options: {
             status: "incomplete",
             sliceId: child.id,
             sliceScope: child.scope,
+            assignedCriteria: child.criteria.length,
             failureKind: stopKind,
             limitation: safeStageLimitation("Code exploration", stopKind, child.id),
             diagnostics: [],
@@ -231,6 +220,7 @@ export async function runCodeSlices(options: {
         status: "incomplete",
         sliceId: slice.id,
         sliceScope: slice.scope,
+        assignedCriteria: slice.criteria.length,
         failureKind: kind,
         limitation: safeStageLimitation("Code exploration", kind, slice.id),
         diagnostics: [],

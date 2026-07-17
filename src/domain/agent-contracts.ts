@@ -13,6 +13,7 @@ export type Usage = z.infer<typeof usageSchema>;
 
 export const runtimeAgentRoleSchema = z.enum([
   "sdd_explorer",
+  "slice_planner",
   "code_explorer",
   "semantic_verifier",
 ]);
@@ -21,6 +22,7 @@ export type RuntimeAgentRole = z.infer<typeof runtimeAgentRoleSchema>;
 // Persisted reports may contain the legacy synthesizer role. Runtime requests cannot use it.
 export const agentRoleSchema = z.enum([
   "sdd_explorer",
+  "slice_planner",
   "code_explorer",
   "semantic_verifier",
   "synthesizer",
@@ -75,6 +77,9 @@ export const codeSliceSummarySchema = z.object({
   kind: z.enum(["implementation", "tests"]).optional(),
   scope: z.enum(["implementation", "test_only"]).optional(),
   status: z.enum(["completed", "incomplete"]),
+  assessmentStatus: z.enum(["complete", "gapped"]).optional(),
+  assignedCriteria: z.number().int().nonnegative().optional(),
+  acceptedCriteria: z.number().int().nonnegative().optional(),
   failureKind: agentFailureKindSchema.optional(),
   attempts: z.number().int().nonnegative(),
   inputTokens: z.number().int().nonnegative(),
@@ -82,3 +87,11 @@ export const codeSliceSummarySchema = z.object({
   requestIds: z.array(safeRequestIdSchema).max(2),
 });
 export type CodeSliceSummary = z.infer<typeof codeSliceSummarySchema>;
+
+export const slicePlanningSummarySchema = z.object({
+  mode: z.enum(["single", "model", "deterministic_fallback"]),
+  proposedSlices: z.number().int().nonnegative(),
+  acceptedSlices: z.number().int().nonnegative(),
+  fallbackReason: safeDiagnosticIdentifierSchema.optional(),
+});
+export type SlicePlanningSummary = z.infer<typeof slicePlanningSummarySchema>;

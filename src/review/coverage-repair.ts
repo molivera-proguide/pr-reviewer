@@ -31,6 +31,7 @@ export async function runCoverageRepair(options: {
       status: "incomplete",
       sliceId,
       sliceScope: "implementation",
+      assignedCriteria: options.criteria.length,
       failureKind: "schema_validation",
       limitation: "Coverage repair had no implementation files available.",
       diagnostics: [],
@@ -166,6 +167,11 @@ export async function runCoverageRepair(options: {
       findings: candidateFindings,
       coverage: candidateCoverage,
       limitations: [],
+      acceptedCriterionIds: [...fullyAcceptedIds].sort(),
+      rejectedCriterionIds: options.criteria
+        .map((criterion) => criterion.id)
+        .filter((criterionId) => !fullyAcceptedIds.has(criterionId))
+        .sort(),
     };
     const complete = fullyAcceptedIds.size === options.criteria.length;
     const rejectionSummary = [...new Set(rejectionReasons)]
@@ -180,6 +186,8 @@ export async function runCoverageRepair(options: {
           status: "completed",
           sliceId,
           sliceScope: "implementation",
+          assignedCriteria: options.criteria.length,
+          assessmentStatus: "complete",
           analysis,
           diagnostics: response.diagnostics,
         }
@@ -187,6 +195,7 @@ export async function runCoverageRepair(options: {
           status: "incomplete",
           sliceId,
           sliceScope: "implementation",
+          assignedCriteria: options.criteria.length,
           failureKind: "schema_validation",
           limitation: `Coverage repair rejected ${options.criteria.length - fullyAcceptedIds.size} requested criterion assessment(s): ${rejectionSummary || "unknown=1"}.`,
           diagnostics: response.diagnostics,
@@ -198,6 +207,7 @@ export async function runCoverageRepair(options: {
       status: "incomplete",
       sliceId,
       sliceScope: "implementation",
+      assignedCriteria: options.criteria.length,
       failureKind: failure.kind,
       limitation: safeStageLimitation("Coverage repair", failure.kind, sliceId),
       diagnostics: failure.diagnostics,

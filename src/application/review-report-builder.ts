@@ -32,7 +32,7 @@ export function buildReviewReport(options: {
     options.now.getTime() + options.config.reportTtlHours * 60 * 60 * 1_000,
   );
   return reviewReportSchema.parse({
-    schemaVersion: "1.5",
+    schemaVersion: "1.6",
     reviewerVersion: APP_VERSION,
     reviewId: options.reviewId,
     createdAt: options.now.toISOString(),
@@ -60,6 +60,7 @@ export function buildReviewReport(options: {
     pendingDecisions: [...new Set(options.pendingDecisions)],
     limitations: options.pipeline.limitations,
     stagesIncomplete: options.pipeline.stagesIncomplete,
+    ...(options.pipeline.planning === undefined ? {} : { planning: options.pipeline.planning }),
     slices: options.pipeline.slices,
     attemptDiagnostics: options.pipeline.attemptDiagnostics,
     costEstimate: estimateReviewCost(options.pipeline.attemptDiagnostics, options.now),

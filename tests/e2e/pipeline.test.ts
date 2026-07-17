@@ -81,6 +81,15 @@ class FakeAgentClient implements StructuredAgentClient {
           },
         ],
       },
+      slice_planner: {
+        slices: [
+          {
+            criterionIds: ["AC-001"],
+            implementationPaths: ["src/policy.ts"],
+            testPaths: [],
+          },
+        ],
+      },
     } as const;
     return {
       data: request.schema.parse(values[request.role]),

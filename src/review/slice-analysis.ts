@@ -1,6 +1,7 @@
 import type { ChangedFile, CoverageDimension, ReviewCoverage } from "../domain/contracts.ts";
 import type {
   AgentFinding,
+  AgentLimitation,
   CodeAnalysis,
   SddCriterion,
   TestObservation,
@@ -13,10 +14,9 @@ import type { ReviewSlice } from "./slicer.ts";
 export interface SliceAnalysis {
   readonly findings: AgentFinding[];
   readonly coverage: Array<ReviewCoverage & { dimension: CoverageDimension }>;
-  readonly limitations: Array<{
-    scope: "global_unavailability" | "slice_isolation";
-    description: string;
-  }>;
+  readonly limitations: AgentLimitation[];
+  readonly acceptedCriterionIds: string[];
+  readonly rejectedCriterionIds: string[];
 }
 
 function uniqueSortedEvidence<
@@ -232,9 +232,18 @@ export function codeFirstAnalysisToSliceAnalysis(options: {
   // A structurally valid response may still omit or contradict a required criterion. Those
   // criteria are deliberately left unassessed so the single directed implementation repair can
   // resolve them without turning test observations or optional metadata into schema retries.
-  const complete = true;
+  const complete = acceptedIds.size === options.slice.criteria.length;
   return {
-    analysis: { findings, coverage, limitations: options.analysis.limitations },
+    analysis: {
+      findings,
+      coverage,
+      limitations: options.analysis.limitations,
+      acceptedCriterionIds: [...acceptedIds].sort(),
+      rejectedCriterionIds: options.slice.criteria
+        .map((criterion) => criterion.id)
+        .filter((criterionId) => !acceptedIds.has(criterionId))
+        .sort(),
+    },
     complete,
     limitation: rejectionLimitation(
       "Code-first exploration",
@@ -270,7 +279,16 @@ export function testOnlyAnalysisToSliceAnalysis(options: {
   }
   const complete = acceptedIds.size === options.slice.criteria.length;
   return {
-    analysis: { findings, coverage, limitations: options.analysis.limitations },
+    analysis: {
+      findings,
+      coverage,
+      limitations: options.analysis.limitations,
+      acceptedCriterionIds: [...acceptedIds].sort(),
+      rejectedCriterionIds: options.slice.criteria
+        .map((criterion) => criterion.id)
+        .filter((criterionId) => !acceptedIds.has(criterionId))
+        .sort(),
+    },
     complete,
     limitation: rejectionLimitation(
       "Test-only exploration",

@@ -34,7 +34,7 @@ const environmentSchema = z.object({
     .min(1_024)
     .max(20 * 1024 * 1024)
     .default(2 * 1024 * 1024),
-  SDD_REVIEWER_MAX_AGENT_CALLS: z.coerce.number().int().min(1).max(30).default(8),
+  SDD_REVIEWER_MAX_AGENT_CALLS: z.coerce.number().int().min(1).max(30).default(10),
   SDD_REVIEWER_MAX_AGENT_OUTPUT_TOKENS: z.coerce
     .number()
     .int()

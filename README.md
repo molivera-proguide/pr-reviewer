@@ -24,10 +24,13 @@ observation to each assigned criterion, avoiding contradictory parallel arrays.
 Assertion-bearing evidence deterministically prevents a confirmed test gap from being classified
 as completely missing. Ambiguous or conflicting implementation coverage is never promoted to
 covered; it is repaired once through a criterion-keyed `covered`/`defect` contract.
+Bounded changes are reviewed in one holistic slice so cross-file behavior remains visible. Larger
+changes use one bounded Sonnet planning call whose proposed slices must pass deterministic path,
+criterion, duplication, and size validation; invalid plans fall back to deterministic slicing.
 Only critical/high implementation candidates reach the Sonnet semantic verifier. Risks and
 SDD-conflict decisions are projected locally, removing the final model synthesis call. A small
-normal review therefore uses two exploration calls plus an optional implementation repair and an
-optional semantic verification call.
+normal review therefore uses one SDD call and one holistic code call, plus optional implementation
+repair and semantic verification calls.
 
 When a PR changes tests only, the report records `reviewScope: test_only`. That two-call flow reviews
 assertions, intent, false positives, and scenario coverage without inferring implementation
@@ -60,7 +63,7 @@ bun run build
 Run diagnostics with `bun run doctor -- --repository-path <path>`, or start the MCP transport with `bun run mcp`. The MCP process writes protocol frames only to `stdout`; operational diagnostics use `stderr`. Automatic `.env` loading is disabled; inject credentials through the managed process environment.
 
 The default model routing uses `claude-haiku-4-5-20251001` for SDD and code exploration, and
-`claude-sonnet-5` at medium effort for semantic verification and orchestration. Override the roles
+`claude-sonnet-5` at medium effort for large-change slice planning and semantic verification. Override the roles
 independently with `SDD_REVIEWER_EXPLORER_MODEL`, `SDD_REVIEWER_ORCHESTRATOR_MODEL`, and
 `SDD_REVIEWER_ORCHESTRATOR_EFFORT`. The legacy `SDD_REVIEWER_MODEL` remains a compatibility
 override for every role.

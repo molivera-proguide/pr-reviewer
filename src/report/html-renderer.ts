@@ -55,7 +55,7 @@ function renderCoverageRow(item: ReviewCoverage): string {
 
 function renderSliceRows(report: ReviewReport): string {
   if (report.slices.length === 0) {
-    return '<tr><td colspan="7" class="empty">No se registraron slices de código.</td></tr>';
+    return '<tr><td colspan="9" class="empty">No se registraron slices de código.</td></tr>';
   }
   return report.slices
     .map(
@@ -63,6 +63,8 @@ function renderSliceRows(report: ReviewReport): string {
     <td><code>${escapeHtml(slice.id)}</code></td>
     <td>${escapeHtml(slice.kind ?? "implementation")}</td>
     <td><span class="coverage coverage--${slice.status === "completed" ? "covered" : "not_verifiable"}">${escapeHtml(slice.status)}</span></td>
+    <td>${escapeHtml(slice.assessmentStatus ?? (slice.status === "completed" ? "complete" : "gapped"))}</td>
+    <td>${slice.acceptedCriteria ?? 0} / ${slice.assignedCriteria ?? 0}</td>
     <td>${escapeHtml(slice.failureKind ?? "—")}</td>
     <td>${slice.attempts}</td>
     <td>${slice.inputTokens} / ${slice.outputTokens}</td>
@@ -126,7 +128,10 @@ export function renderReportHtml(report: ReviewReport): string {
   const incompleteNotice =
     report.status === "completed"
       ? ""
-      : '<aside class="warning"><strong>Revisión parcial</strong><span>0 hallazgos no equivale a 0 defectos: parte del cambio no fue revisada.</span></aside>';
+      : '<aside class="warning"><strong>Revisión parcial</strong><span>Uno o más criterios o fragmentos del cambio no pudieron verificarse completamente.</span></aside>';
+  const planningSummary = report.planning
+    ? `${report.planning.mode} · ${report.planning.acceptedSlices} slices${report.planning.fallbackReason === undefined ? "" : ` · ${report.planning.fallbackReason}`}`
+    : "legacy";
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -213,6 +218,7 @@ export function renderReportHtml(report: ReviewReport): string {
     <dl class="meta">
       <div><dt>Feature</dt><dd>${escapeHtml(feature)}</dd></div><div><dt>Modelos explorador / orquestador</dt><dd>${escapeHtml(modelSummary)}</dd></div>
       <div><dt>Alcance</dt><dd>${escapeHtml(scopeLabel)}</dd></div>
+      <div><dt>Planificación</dt><dd>${escapeHtml(planningSummary)}</dd></div>
       <div><dt>Cache leído</dt><dd>${cacheReadTokens} tokens</dd></div><div><dt>Thinking</dt><dd>${thinkingTokens} tokens</dd></div>
       <div><dt>HEAD SHA</dt><dd><code>${escapeHtml(report.headSha)}</code></dd></div><div><dt>Base SHA</dt><dd><code>${escapeHtml(report.baseSha)}</code></dd></div>
       <div><dt>Review ID</dt><dd><code>${escapeHtml(report.reviewId)}</code></dd></div><div><dt>Generado</dt><dd>${escapeHtml(report.createdAt)}</dd></div>
@@ -245,7 +251,7 @@ export function renderReportHtml(report: ReviewReport): string {
   </section>
 
   <section><div class="section-head"><b>06</b><h2>Ejecución por slice</h2></div>
-    <table><thead><tr><th>Slice</th><th>Tipo</th><th>Estado</th><th>Fallo</th><th>Intentos</th><th>Tokens in/out</th><th>Request IDs</th></tr></thead><tbody>${renderSliceRows(report)}</tbody></table>
+    <table><thead><tr><th>Slice</th><th>Tipo</th><th>Ejecución</th><th>Evaluación</th><th>Criterios</th><th>Fallo</th><th>Intentos</th><th>Tokens in/out</th><th>Request IDs</th></tr></thead><tbody>${renderSliceRows(report)}</tbody></table>
     <h3>Intentos de agentes</h3>
     <table><thead><tr><th>Rol</th><th>Modelo</th><th>Slice</th><th>Intento</th><th>Estado</th><th>Causa</th><th>Tokens in/out</th><th>Request ID</th></tr></thead><tbody>${renderAttemptRows(report)}</tbody></table>
   </section>

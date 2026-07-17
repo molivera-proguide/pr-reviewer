@@ -168,16 +168,22 @@ function groupedByDomain(files: readonly ChangedFile[], maxSlices: number): Chan
 }
 
 function criterionScore(criterion: SddCriterion, bucket: SliceBucket): number {
-  const tokens = (criterion.description.toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter(
-    (token) => token.length >= 4,
+  const normalizeToken = (token: string): string => {
+    if (token.length > 4 && token.endsWith("ies")) return `${token.slice(0, -3)}y`;
+    if (token.length > 4 && token.endsWith("s") && !token.endsWith("ss")) {
+      return token.slice(0, -1);
+    }
+    return token;
+  };
+  const tokens = (criterion.description.toLowerCase().match(/[a-z0-9_]+/g) ?? [])
+    .filter((token) => token.length >= 4)
+    .map(normalizeToken);
+  const pathTokens = new Set(
+    [...bucket.implementationFiles, ...bucket.testFiles].flatMap((file) =>
+      (file.path.toLowerCase().match(/[a-z0-9_]+/g) ?? []).map(normalizeToken),
+    ),
   );
-  const paths = [...bucket.implementationFiles, ...bucket.testFiles].map((file) =>
-    file.path.toLowerCase(),
-  );
-  return tokens.reduce(
-    (score, token) => score + (paths.some((path) => path.includes(token)) ? 1 : 0),
-    0,
-  );
+  return tokens.reduce((score, token) => score + (pathTokens.has(token) ? 1 : 0), 0);
 }
 
 export function createReviewSlices(

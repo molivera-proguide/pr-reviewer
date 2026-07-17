@@ -46,9 +46,12 @@ dependencies have production defaults and may be replaced in tests without chang
 
 The deterministic TypeScript pipeline remains the control plane. It schedules all stages, enforces
 budgets, and computes coverage and the verdict; no model can execute a command or choose a provider
-operation. Haiku 4.5 handles the isolated `sdd_explorer` and `code_explorer` roles. Sonnet 5 handles
-only material implementation findings and ambiguous contractual claims in `semantic_verifier` at
-explicitly bounded effort. Test gaps do not enter that expensive semantic call because their
+operation. Haiku 4.5 handles the isolated `sdd_explorer` and `code_explorer` roles. Bounded changes
+use one holistic code slice. For larger changes, Sonnet 5 proposes up to three slices through
+`slice_planner`; the control plane rejects invented paths, omitted or duplicated criteria, excessive
+path duplication, and oversized slices before execution, then falls back deterministically when
+needed. Sonnet also handles material implementation findings and ambiguous contractual claims in
+`semantic_verifier` at explicitly bounded effort. Test gaps do not enter that expensive semantic call because their
 severity and verdict effect are deterministic.
 
 Implementation and test coverage are aggregated separately and verified deterministically before
@@ -61,7 +64,8 @@ Sonnet verifier receives only compact evidence for findings that can block or ma
 misclassified. Risks are stable verified finding claims and pending decisions are extracted SDD
 conflicts, so no final model synthesis call can add cost or turn an incomplete review green.
 
-Semantic verification may correct severity, impact, and criterion associations for every finding
+Semantic verification runs before omitted-criterion repair, so a rejected provisional finding
+cannot suppress the one bounded repair opportunity. It may correct severity, impact, and criterion associations for every finding
 included in a material review. A partial implementation coverage row without a verified defect is
 kept `not_verifiable` and becomes eligible for the single repair; partial test coverage is never
 promoted to covered because some test evidence does not prove every obligation is asserted. Missing
@@ -117,12 +121,13 @@ is always local and deterministic. Reports include a local USD estimate
 based on the bundled, dated public Anthropic price table and label whether all model rates were
 known.
 
-Code exploration is aggregated per slice. A refusal, truncation, schema failure, or exhausted API
-failure leaves that slice `incomplete` while completed slices, extracted SDD criteria, verified
+Code exploration is aggregated per slice. Execution status and assessment completeness are
+reported separately: a valid response can complete execution while leaving assigned criteria
+gapped. A refusal, truncation, schema failure, or exhausted API failure leaves that slice `incomplete` while completed slices, extracted SDD criteria, verified
 findings, and partial coverage are retained. All workers already in flight are awaited before the
 report is assembled. Any incomplete slice makes the global review incomplete and prevents a green
 verdict.
 
 ## Long-running behavior
 
-The MVP call is synchronous and accepts exactly one selection. It uses the MCP cancellation signal, a global deadline, progress notifications when supported, at most two concurrent Anthropic requests, and a maximum of eight model calls including application-level repair attempts. A future job/task transport can wrap the same coordinator without changing domain contracts.
+The MVP call is synchronous and accepts exactly one selection. It uses the MCP cancellation signal, a global deadline, progress notifications when supported, at most two concurrent Anthropic requests, and a maximum of ten model calls including slice planning and application-level repair attempts. A future job/task transport can wrap the same coordinator without changing domain contracts.

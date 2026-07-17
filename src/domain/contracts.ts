@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { attemptSummarySchema, codeSliceSummarySchema, usageSchema } from "./agent-contracts.ts";
+import {
+  attemptSummarySchema,
+  codeSliceSummarySchema,
+  slicePlanningSummarySchema,
+  usageSchema,
+} from "./agent-contracts.ts";
 
 export * from "./agent-contracts.ts";
 
@@ -169,7 +174,7 @@ export const verdictSchema = z.enum([
 export type Verdict = z.infer<typeof verdictSchema>;
 
 export const reviewReportSchema = z.object({
-  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]),
+  schemaVersion: z.enum(["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"]),
   reviewerVersion: z.string().min(1).optional(),
   reviewId: z.string().min(1),
   createdAt: z.string().datetime({ offset: true }),
@@ -199,6 +204,7 @@ export const reviewReportSchema = z.object({
   pendingDecisions: z.array(z.string()),
   limitations: z.array(z.string()),
   stagesIncomplete: z.array(z.string()),
+  planning: slicePlanningSummarySchema.optional(),
   slices: z.array(codeSliceSummarySchema).default([]),
   attemptDiagnostics: z.array(attemptSummarySchema).default([]),
   costEstimate: z

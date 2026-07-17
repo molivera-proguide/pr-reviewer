@@ -7,7 +7,7 @@ export interface AgentModelRouting {
 }
 
 export function isOrchestratorRole(role: RuntimeAgentRole): boolean {
-  return role === "semantic_verifier";
+  return role === "slice_planner" || role === "semantic_verifier";
 }
 
 export function modelForRole(role: RuntimeAgentRole, routing: AgentModelRouting): string {

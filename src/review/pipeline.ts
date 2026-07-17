@@ -5,6 +5,7 @@ import type {
   Finding,
   ReviewCoverage,
   ReviewStatus,
+  SlicePlanningSummary,
   Usage,
 } from "../domain/contracts.ts";
 import type { UsageBudget } from "../security/budget.ts";
@@ -28,12 +29,8 @@ import {
 } from "./finding-projection.ts";
 import { runSemanticVerification } from "./semantic-verification.ts";
 import { type CodeSliceResult, runCodeSlices } from "./slice-executor.ts";
-import {
-  classifyReviewChange,
-  createReviewSlices,
-  type ReviewSliceScope,
-  sliceKindOf,
-} from "./slicer.ts";
+import { planReviewSlices } from "./slice-planner.ts";
+import { classifyReviewChange, type ReviewSliceScope, sliceKindOf } from "./slicer.ts";
 
 export { omittedImplementationCriteria } from "./coverage-projection.ts";
 export {
@@ -53,6 +50,7 @@ export interface PipelineResult {
   readonly pendingDecisions: string[];
   readonly limitations: string[];
   readonly stagesIncomplete: string[];
+  readonly planning?: SlicePlanningSummary;
   readonly slices: CodeSliceSummary[];
   readonly attemptDiagnostics: AttemptSummary[];
   readonly status: ReviewStatus;
@@ -84,11 +82,15 @@ function loadedArtifacts(
 
 function sliceSummary(result: CodeSliceResult): CodeSliceSummary {
   const diagnostics = result.diagnostics;
+  const acceptedCriteria = result.analysis?.acceptedCriterionIds.length ?? 0;
   return {
     id: result.sliceId,
     kind: result.sliceScope === "implementation" ? "implementation" : "tests",
     scope: result.sliceScope,
     status: result.status,
+    ...(result.status === "completed" ? { assessmentStatus: result.assessmentStatus } : {}),
+    assignedCriteria: result.assignedCriteria,
+    acceptedCriteria,
     ...(result.status === "incomplete" ? { failureKind: result.failureKind } : {}),
     attempts: diagnostics.length,
     inputTokens: diagnostics.reduce((sum, item) => sum + item.inputTokens, 0),
@@ -140,7 +142,15 @@ export async function runReviewPipeline(options: {
   }));
   const reviewScope: ReviewSliceScope =
     classifyReviewChange(reviewFiles) === "test_only" ? "test_only" : "implementation";
-  const slices = createReviewSlices(reviewFiles, sddResponse.data.criteria);
+  await progress("slice_planning", 40);
+  const planning = await planReviewSlices({
+    files: reviewFiles,
+    criteria: sddResponse.data.criteria,
+    client: options.client,
+    signal: options.signal,
+  });
+  diagnostics.push(...planning.diagnostics);
+  const slices = [...planning.slices];
   await progress("code_exploration", 45);
   let sliceResults = await runCodeSlices({
     slices,
@@ -152,10 +162,21 @@ export async function runReviewPipeline(options: {
   });
   diagnostics.push(...sliceResults.flatMap((result) => result.diagnostics));
   await progress("evidence_verification", 68);
-  let findings = verifyFindings(
+  const primaryFindings = verifyFindings(
     options.context.snapshot,
     findingsFromCompletedSlices(sliceResults, sddResponse.data.criteria),
   );
+  const primarySemantic = await runSemanticVerification({
+    findings: primaryFindings,
+    criteria: sddResponse.data.criteria,
+    client: options.client,
+    signal: options.signal,
+  });
+  let findings = primarySemantic.findings;
+  diagnostics.push(...primarySemantic.diagnostics);
+  postStageLimitations.push(...primarySemantic.limitations);
+  postStagesIncomplete.push(...primarySemantic.stagesIncomplete);
+  postPendingDecisions.push(...primarySemantic.pendingDecisions);
   const initialImplementationCandidates = [
     ...coverageFromCompletedSlices(sliceResults, "implementation", findings),
     ...coverageFromFindings(findings, "implementation", sddResponse.data.criteria),
@@ -188,23 +209,23 @@ export async function runReviewPipeline(options: {
     });
     diagnostics.push(...repair.diagnostics);
     sliceResults = [...sliceResults, repair];
-    findings = verifyFindings(
+    const repairFindings = verifyFindings(
       options.context.snapshot,
-      findingsFromCompletedSlices(sliceResults, sddResponse.data.criteria),
+      findingsFromCompletedSlices([repair], sddResponse.data.criteria),
     );
+    const repairSemantic = await runSemanticVerification({
+      findings: repairFindings,
+      criteria: sddResponse.data.criteria,
+      client: options.client,
+      signal: options.signal,
+    });
+    findings = [...findings, ...repairSemantic.findings];
+    diagnostics.push(...repairSemantic.diagnostics);
+    postStageLimitations.push(...repairSemantic.limitations);
+    postStagesIncomplete.push(...repairSemantic.stagesIncomplete);
+    postPendingDecisions.push(...repairSemantic.pendingDecisions);
   }
   const incompleteSlices = sliceResults.filter((result) => result.status === "incomplete");
-  const semantic = await runSemanticVerification({
-    findings,
-    criteria: sddResponse.data.criteria,
-    client: options.client,
-    signal: options.signal,
-  });
-  findings = semantic.findings;
-  diagnostics.push(...semantic.diagnostics);
-  postStageLimitations.push(...semantic.limitations);
-  postStagesIncomplete.push(...semantic.stagesIncomplete);
-  postPendingDecisions.push(...semantic.pendingDecisions);
   findings = withStableFindingIds(findings.map(applySeverityCap).map(normalizeTestCoverageFinding));
 
   await progress("deterministic_synthesis", 82);
@@ -252,7 +273,7 @@ export async function runReviewPipeline(options: {
 
   const limitations = [
     ...options.context.limitations,
-    ...globalAgentLimitations(sliceResults),
+    ...globalAgentLimitations(sliceResults, options.context.snapshot),
     ...incompleteSlices.map((result) => result.limitation),
     ...postStageLimitations,
     ...(artifactPayload.truncated ? ["SDD agent context was truncated to its safety budget."] : []),
@@ -307,6 +328,7 @@ export async function runReviewPipeline(options: {
     pendingDecisions: [...new Set(pendingDecisions)],
     limitations: [...new Set(limitations)],
     stagesIncomplete: [...new Set(stagesIncomplete)],
+    planning: planning.summary,
     slices: sliceResults.map(sliceSummary),
     attemptDiagnostics: diagnostics,
     status,

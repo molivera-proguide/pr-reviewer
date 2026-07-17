@@ -10,10 +10,11 @@ const conciseText = z.string().min(1).max(1_000);
 const agentEvidenceSchema = evidenceSchema.extend({
   excerpt: z.string().max(1_200),
 });
-const agentLimitationSchema = z.object({
+export const agentLimitationSchema = z.object({
   scope: z.enum(["global_unavailability", "slice_isolation"]),
   description: conciseText,
 });
+export type AgentLimitation = z.infer<typeof agentLimitationSchema>;
 
 export const sddCriterionSchema = z.object({
   id: z
@@ -37,6 +38,21 @@ export const sddAnalysisSchema = z.object({
   sddApproved: z.boolean(),
 });
 export type SddAnalysis = z.infer<typeof sddAnalysisSchema>;
+
+const plannedPathSchema = z.string().min(1).max(500);
+export const slicePlanProposalSchema = z.object({
+  slices: z
+    .array(
+      z.object({
+        criterionIds: z.array(z.string().min(1).max(100)).max(50),
+        implementationPaths: z.array(plannedPathSchema).max(100),
+        testPaths: z.array(plannedPathSchema).max(100),
+      }),
+    )
+    .min(1)
+    .max(3),
+});
+export type SlicePlanProposal = z.infer<typeof slicePlanProposalSchema>;
 
 const agentFindingFields = {
   id: z.string().min(1).max(100).describe("Unique finding identifier within this response."),

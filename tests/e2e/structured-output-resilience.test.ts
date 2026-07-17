@@ -195,6 +195,7 @@ class RegressionClient implements StructuredAgentClient {
       testGapStatus?: "partial" | "missing";
       omitTestGapMetadata?: boolean;
       crossDimensionTestEvidence?: boolean;
+      rejectSemanticCriterionId?: string;
     } = {},
   ) {}
 
@@ -421,7 +422,9 @@ class RegressionClient implements StructuredAgentClient {
           ).findings ?? findings()
         ).map((finding) => ({
           findingId: finding.id,
-          confirmed: true,
+          confirmed: !finding.criterionIds.includes(
+            this.repairBehavior.rejectSemanticCriterionId ?? "",
+          ),
           rationale: "The exact implementation contradicts the required criterion.",
           adjustedSeverity: finding.claim.includes("AC-004")
             ? ("medium" as const)
@@ -437,6 +440,23 @@ class RegressionClient implements StructuredAgentClient {
               ? ["AC-002"]
               : finding.criterionIds,
         })),
+      },
+      slice_planner: {
+        slices: [
+          {
+            criterionIds: (request.payload as { criteria?: { id: string }[] }).criteria?.map(
+              (criterion) => criterion.id,
+            ) ?? ["AC-001"],
+            implementationPaths:
+              (request.payload as { files?: { path: string; kind: string }[] }).files
+                ?.filter((file) => file.kind === "implementation")
+                .map((file) => file.path) ?? [],
+            testPaths:
+              (request.payload as { files?: { path: string; kind: string }[] }).files
+                ?.filter((file) => file.kind === "tests")
+                .map((file) => file.path) ?? [],
+          },
+        ],
       },
     } as const;
     return {
@@ -580,6 +600,23 @@ describe("structured-output resilience regression", () => {
     ).toBeTrue();
     expect(repairPayload?.slice?.testFiles).toEqual([]);
     expect(result.usage.calls).toBeLessThanOrEqual(4);
+  });
+
+  test("repairs a criterion after semantic verification rejects its provisional defect", async () => {
+    const usage = budget();
+    const client = new RegressionClient(usage, null, "refusal", null, false, false, false, {
+      rejectSemanticCriterionId: "AC-002",
+    });
+    const result = await runReviewPipeline({
+      context: context(snapshot()),
+      client,
+      budget: usage,
+      signal: new AbortController().signal,
+    });
+
+    expect(client.startedSlices.filter((id) => id === "coverage-repair-1")).toHaveLength(1);
+    expect(result.findings.some((finding) => finding.criterionIds.includes("AC-002"))).toBeFalse();
+    expect(result.coverage.find((item) => item.criterionId === "AC-002")?.status).toBe("covered");
   });
 
   test("lets an accepted repair supersede an earlier ambiguous assessment", async () => {
@@ -872,19 +909,26 @@ describe("structured-output resilience regression", () => {
     expect(projections[0]?.cost.failedAttemptAmount).toBe(0);
   });
 
-  test("preserves all criteria and successful slices when one domain slice refuses", async () => {
+  test("keeps a bounded holistic review conservative when its explorer refuses", async () => {
     const usage = budget();
     const result = await runReviewPipeline({
       context: context(snapshot(["src/discount.ts", "tests/discount.test.ts", "docs/discount.md"])),
-      client: new RegressionClient(usage, "slice-2"),
+      client: new RegressionClient(usage, "slice-1"),
       budget: usage,
       signal: new AbortController().signal,
     });
     expect(result.status).toBe("incomplete");
     expect(result.coverage).toHaveLength(4);
     expect(result.coverage.some((item) => item.status === "not_verifiable")).toBeTrue();
-    expect(result.slices.map((slice) => slice.status)).toEqual(["completed", "incomplete"]);
-    expect(result.stagesIncomplete).toContain("code_exploration:slice-2");
+    expect(result.planning?.mode).toBe("single");
+    expect(result.slices).toEqual([
+      expect.objectContaining({
+        status: "incomplete",
+        assignedCriteria: 4,
+        acceptedCriteria: 0,
+      }),
+    ]);
+    expect(result.stagesIncomplete).toContain("code_exploration:slice-1");
     expect(result.pendingDecisions.join(" ")).toContain("Zero findings does not mean zero defects");
     expect(
       calculateVerdict({
@@ -893,7 +937,7 @@ describe("structured-output resilience regression", () => {
         pendingDecisions: result.pendingDecisions,
         sddApproved: result.sdd.sddApproved,
       }),
-    ).toBe("RIESGO_BLOQUEANTE");
+    ).toBe("REQUIERE_DECISION");
   });
 
   test("splits a truncated multi-file code slice instead of repeating it", async () => {
@@ -927,9 +971,9 @@ describe("structured-output resilience regression", () => {
     expect(result.pendingDecisions.join(" ")).toContain("Zero findings does not mean zero defects");
   });
 
-  test("stops scheduling after a permanent failure and awaits an in-flight worker", async () => {
+  test("does not schedule extra explorers after a holistic permanent failure", async () => {
     const usage = budget();
-    const client = new RegressionClient(usage, "slice-1", "permanent_api", "slice-2");
+    const client = new RegressionClient(usage, "slice-1", "permanent_api");
     const result = await runReviewPipeline({
       context: context(
         snapshot([
@@ -943,12 +987,10 @@ describe("structured-output resilience regression", () => {
       budget: usage,
       signal: new AbortController().signal,
     });
-    expect(client.startedSlices).toEqual(["slice-1", "slice-2"]);
-    expect(client.completedSlices).toEqual(["slice-2"]);
+    expect(client.startedSlices).toEqual(["slice-1"]);
+    expect(client.completedSlices).toEqual([]);
     expect(result.slices).toEqual([
       expect.objectContaining({ id: "slice-1", status: "incomplete" }),
-      expect.objectContaining({ id: "slice-2", status: "completed" }),
-      expect.objectContaining({ id: "slice-3", status: "incomplete" }),
     ]);
     expect(result.status).toBe("incomplete");
     expect(
